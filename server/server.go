@@ -93,12 +93,13 @@ func newClient(IP net.IP) (*client, error) {
 	return newclient, nil
 }
 
-func sendPacket(conn *net.IPConn, dstIP net.IP, n int, message []byte, config *Config) {
+func sendPacket(conn *net.IPConn, dstIP net.IP, message []byte, config *Config) {
+	// Respond to any incoming packet regardless of the source port
 	switch config.Protocol {
 	case "udp":
 		sendUDPPacket(conn, dstIP, message)
 	case "tcp":
-		sendTCPPacket(conn, dstIP, n, message)
+		sendTCPPacket(conn, dstIP, message)
 	case "icmp":
 		sendICMPPacket(conn, dstIP, message)
 	default:
@@ -110,7 +111,7 @@ func sendUDPPacket(conn *net.IPConn, dstIP net.IP, message []byte) {
 	// Manually construct the UDP packet and send it
 	udpHeader := make([]byte, 8) // UDP header (8 bytes: 2 * 2-byte ports, 2 * 2-byte length, checksum)
 	// Here you would manually set the UDP header fields (SrcPort, DstPort, Length, Checksum)
-	// As an example, just send the payload message directly
+	// For responding to any port, you could use the source port of the incoming packet
 
 	// Send the UDP packet (skip checksum calculation)
 	_, err := conn.WriteTo(append(udpHeader, message...), &net.IPAddr{IP: dstIP})
@@ -119,10 +120,11 @@ func sendUDPPacket(conn *net.IPConn, dstIP net.IP, message []byte) {
 	}
 }
 
-func sendTCPPacket(conn *net.IPConn, dstIP net.IP, seq int, message []byte) {
+func sendTCPPacket(conn *net.IPConn, dstIP net.IP, message []byte) {
 	// Manually construct the TCP packet and send it
 	tcpHeader := make([]byte, 20) // TCP header (minimum 20 bytes)
 	// Here you would manually set the TCP header fields (SrcPort, DstPort, Seq, Ack, Flags, etc.)
+	// For responding to any port, you could use the source port of the incoming packet
 
 	// Send the TCP packet (skip checksum calculation)
 	_, err := conn.WriteTo(append(tcpHeader, message...), &net.IPAddr{IP: dstIP})
@@ -227,7 +229,8 @@ func handleOutgoingPackets(conn *net.IPConn, outputChan chan *packetVector, conf
 			message := fmt.Sprintf("packet echo Seq %d: %s", pv.client.count, pv.packetByteSlice)
 
 			// Send the packet using net.IPConn's WriteTo method
-			sendPacket(conn, pv.destIP, pv.client.count, []byte(message), config)
+			sendPacket(conn, pv.destIP, []byte(message), config)
+			log.Printf("packet %d to %s Sent.\n", pv.client.count, pv.client.IP)
 		}
 	}
 }

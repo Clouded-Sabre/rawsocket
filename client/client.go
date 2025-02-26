@@ -26,6 +26,14 @@ type Config struct {
 	ARPCacheTimeout   int
 }
 
+// ANSI escape codes for colors
+const (
+	Red    = "\033[31m"
+	Green  = "\033[32m"
+	Yellow = "\033[33m"
+	Reset  = "\033[0m"
+)
+
 func parseArgs() *Config {
 	serverIPStr := flag.String("serverIP", "", "IP address of IPConn server")
 	sourceIPStr := flag.String("sourceIP", "", "IP address of local source address")
@@ -135,7 +143,8 @@ func sendPackets(n int, interval int, conn *rawsocket.RawIPConn, config *Config,
 
 	intervalDuration := time.Duration(interval) * time.Millisecond
 	for i := 0; i < n; i++ {
-		message := fmt.Sprintf("packet Seq:%d", i)
+		fmt.Println(Yellow+"Sending packet", i, Reset)
+		message := fmt.Sprintf("Sending packet Seq:%d", i)
 
 		switch config.Protocol {
 		case layers.IPProtocolUDP:
@@ -147,6 +156,8 @@ func sendPackets(n int, interval int, conn *rawsocket.RawIPConn, config *Config,
 		default:
 			log.Fatalf("Unsupported protocol: %v", config.Protocol)
 		}
+
+		fmt.Println(Yellow+"Packet", i, "sent.", Reset)
 
 		time.Sleep(intervalDuration)
 	}
