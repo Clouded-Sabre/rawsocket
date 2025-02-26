@@ -65,7 +65,7 @@ func main() {
 	outputChan := make(chan *packetVector)
 
 	wg.Add(1)
-	go receivePackets(listener, outputChan, stopChan, &wg)
+	go receivePackets(listener, outputChan, stopChan, config, &wg)
 
 	wg.Add(1)
 	go handleOutgoingPackets(listener, outputChan, config, stopChan, &wg)
@@ -145,7 +145,7 @@ func sendICMPPacket(conn *net.IPConn, dstIP net.IP, message []byte) {
 	}
 }
 
-func receivePackets(conn *net.IPConn, outputChan chan *packetVector, stopChan chan struct{}, wg *sync.WaitGroup) {
+func receivePackets(conn *net.IPConn, outputChan chan *packetVector, stopChan chan struct{}, config *Config, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	buffer := make([]byte, 1024) // Buffer to hold incoming packets
@@ -183,7 +183,7 @@ func receivePackets(conn *net.IPConn, outputChan chan *packetVector, stopChan ch
 				cl, _ = newClient(net.ParseIP(srcIP))
 				clientMap[srcIP] = cl
 				wg.Add(1)
-				go handleIncomingPackets(cl, outputChan, stopChan, wg)
+				go handleIncomingPackets(cl, outputChan, stopChan, config, wg)
 			}
 			mu.Unlock()
 
@@ -193,26 +193,53 @@ func receivePackets(conn *net.IPConn, outputChan chan *packetVector, stopChan ch
 	}
 }
 
-func handleIncomingPackets(client *client, outputChan chan *packetVector, stopChan chan struct{}, wg *sync.WaitGroup) {
+func handleIncomingPackets(client *client, outputChan chan *packetVector, stopChan chan struct{}, config *Config, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	select {
-	case <-stopChan:
-		log.Printf("handleIncomingPackets from %s got stop signal. Exiting...\n", client.IP.String())
-		return
-	case l4packetByteSlice := <-client.inputChan:
-		// You can manually handle packet decoding if needed, otherwise, echo back the message
-		fmt.Printf("Received packet from %s: %s\n", client.IP.String(), string(l4packetByteSlice))
+	// Handle the loop to continuously process packets for the client
+	for {
+		select {
+		case <-stopChan:
+			log.Printf("handleIncomingPackets from %s got stop signal. Exiting...\n", client.IP.String())
+			return
+		case l4packetByteSlice := <-client.inputChan:
+			// Print the client IP address
+			fmt.Printf("Received packet from client IP: %s\n", client.IP.String())
 
-		// Echo back
-		pv := &packetVector{
-			packetByteSlice: l4packetByteSlice,
-			destIP:          client.IP,
-			client:          client,
+			// Print the protocol type (TCP/UDP/ICMP)
+			fmt.Printf("Protocol type: %s\n", config.Protocol)
+
+			// Parse the L4 packet (TCP/UDP) to extract port information and payload
+			if config.Protocol == "tcp" || config.Protocol == "udp" {
+				// Extract the source and destination ports (first 4 bytes after the IP header)
+				var srcPort, dstPort uint16
+				srcPort = uint16(l4packetByteSlice[0])<<8 | uint16(l4packetByteSlice[1])
+				dstPort = uint16(l4packetByteSlice[2])<<8 | uint16(l4packetByteSlice[3])
+
+				// Print the source and destination ports
+				fmt.Printf("Source Port: %d, Destination Port: %d\n", srcPort, dstPort)
+
+				// Extract the payload (skipping the TCP/UDP headers)
+				payload := l4packetByteSlice[8:] // For UDP/TCP, the header is at least 8 bytes
+				if config.Protocol == "tcp" {
+					// TCP headers are usually 20 bytes; we can skip them
+					payload = l4packetByteSlice[20:]
+				}
+
+				// Print only the payload content (ASCII representation for simplicity)
+				fmt.Printf("Payload: %s\n", string(payload))
+			}
+
+			// Echo back the packet (to the client)
+			pv := &packetVector{
+				packetByteSlice: l4packetByteSlice,
+				destIP:          client.IP,
+				client:          client,
+			}
+
+			client.count++
+			outputChan <- pv
 		}
-
-		client.count++
-		outputChan <- pv
 	}
 }
 
