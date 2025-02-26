@@ -4,3 +4,4 @@ server/server.exe
 test/netlib/netlib.exe
 test/simplesend/simplesend.exe
 client/client
+server/server
