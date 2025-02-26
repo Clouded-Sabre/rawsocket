@@ -4,6 +4,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"flag"
 	"fmt"
 	"io"
@@ -93,13 +94,13 @@ func newClient(IP net.IP) (*client, error) {
 	return newclient, nil
 }
 
-func sendPacket(conn *net.IPConn, dstIP net.IP, message []byte, config *Config) {
-	// Respond to any incoming packet regardless of the source port
+func sendPacket(conn *net.IPConn, dstIP net.IP, message []byte, config *Config, originalPacket []byte) {
+	//fmt.Printf("originalPacketByteSlice length: %d\n", len(originalPacket))
 	switch config.Protocol {
 	case "udp":
-		sendUDPPacket(conn, dstIP, message)
+		sendUDPPacket(conn, dstIP, message, originalPacket)
 	case "tcp":
-		sendTCPPacket(conn, dstIP, message)
+		sendTCPPacket(conn, dstIP, message, originalPacket)
 	case "icmp":
 		sendICMPPacket(conn, dstIP, message)
 	default:
@@ -107,11 +108,50 @@ func sendPacket(conn *net.IPConn, dstIP net.IP, message []byte, config *Config) 
 	}
 }
 
-func sendUDPPacket(conn *net.IPConn, dstIP net.IP, message []byte) {
-	// Manually construct the UDP packet and send it
-	udpHeader := make([]byte, 8) // UDP header (8 bytes: 2 * 2-byte ports, 2 * 2-byte length, checksum)
-	// Here you would manually set the UDP header fields (SrcPort, DstPort, Length, Checksum)
-	// For responding to any port, you could use the source port of the incoming packet
+func sendUDPPacket(conn *net.IPConn, dstIP net.IP, message []byte, originalPacket []byte) {
+	// Reverse source and destination ports (first 4 bytes after the IP header)
+	srcPort := uint16(originalPacket[0])<<8 | uint16(originalPacket[1])
+	dstPort := uint16(originalPacket[2])<<8 | uint16(originalPacket[3])
+
+	// Swap ports
+	udpHeader := make([]byte, 8)
+	udpHeader[0] = byte(dstPort >> 8)
+	udpHeader[1] = byte(dstPort & 0xFF)
+	udpHeader[2] = byte(srcPort >> 8)
+	udpHeader[3] = byte(srcPort & 0xFF)
+
+	// Set the UDP length (header length 8 bytes + payload length)
+	udpLength := uint16(8 + len(message))
+	udpHeader[4] = byte(udpLength >> 8)
+	udpHeader[5] = byte(udpLength & 0xFF)
+
+	// Optionally set the checksum to 0 (this would need to be computed in real use)
+	udpHeader[6] = 0
+	udpHeader[7] = 0
+
+	// Pseudo-header for checksum calculation
+	pseudoHeader := make([]byte, 12)
+	// Get the source IP from the conn's LocalAddr() method
+	localAddr := conn.LocalAddr().(*net.IPAddr) // cast to *net.IPAddr
+	copy(pseudoHeader[0:4], localAddr.IP.To4()) // Source IP from the listening IP
+
+	// Destination IP (4 bytes)
+	copy(pseudoHeader[4:8], dstIP.To4()) // Destination IP
+	// Reserved (1 byte), Protocol (1 byte), UDP Length (2 bytes)
+	pseudoHeader[8] = 0  // Reserved byte
+	pseudoHeader[9] = 17 // Protocol (17 for UDP)
+	binary.BigEndian.PutUint16(pseudoHeader[10:12], udpLength)
+
+	// Concatenate pseudo-header, UDP header, and data for checksum calculation
+	dataForChecksum := append(pseudoHeader, udpHeader...)
+	dataForChecksum = append(dataForChecksum, message...)
+
+	// Calculate the checksum
+	checksum := CalculateChecksum(dataForChecksum)
+
+	// Set the checksum in the UDP header
+	udpHeader[6] = byte(checksum >> 8)
+	udpHeader[7] = byte(checksum & 0xFF)
 
 	// Send the UDP packet (skip checksum calculation)
 	_, err := conn.WriteTo(append(udpHeader, message...), &net.IPAddr{IP: dstIP})
@@ -120,11 +160,17 @@ func sendUDPPacket(conn *net.IPConn, dstIP net.IP, message []byte) {
 	}
 }
 
-func sendTCPPacket(conn *net.IPConn, dstIP net.IP, message []byte) {
-	// Manually construct the TCP packet and send it
-	tcpHeader := make([]byte, 20) // TCP header (minimum 20 bytes)
-	// Here you would manually set the TCP header fields (SrcPort, DstPort, Seq, Ack, Flags, etc.)
-	// For responding to any port, you could use the source port of the incoming packet
+func sendTCPPacket(conn *net.IPConn, dstIP net.IP, message []byte, originalPacket []byte) {
+	// Reverse source and destination ports (first 4 bytes after the IP header)
+	srcPort := uint16(originalPacket[0])<<8 | uint16(originalPacket[1])
+	dstPort := uint16(originalPacket[2])<<8 | uint16(originalPacket[3])
+
+	// Swap ports
+	tcpHeader := make([]byte, 20)
+	tcpHeader[0] = byte(dstPort >> 8)
+	tcpHeader[1] = byte(dstPort & 0xFF)
+	tcpHeader[2] = byte(srcPort >> 8)
+	tcpHeader[3] = byte(srcPort & 0xFF)
 
 	// Send the TCP packet (skip checksum calculation)
 	_, err := conn.WriteTo(append(tcpHeader, message...), &net.IPAddr{IP: dstIP})
@@ -134,11 +180,7 @@ func sendTCPPacket(conn *net.IPConn, dstIP net.IP, message []byte) {
 }
 
 func sendICMPPacket(conn *net.IPConn, dstIP net.IP, message []byte) {
-	// Manually construct the ICMP packet and send it
-	icmpHeader := make([]byte, 8) // ICMP header (8 bytes: Type, Code, Checksum, etc.)
-	// Here you would manually set the ICMP header fields (Type, Code, Checksum, etc.)
-
-	// Send the ICMP packet (skip checksum calculation)
+	icmpHeader := make([]byte, 8)
 	_, err := conn.WriteTo(append(icmpHeader, message...), &net.IPAddr{IP: dstIP})
 	if err != nil {
 		log.Fatalf("Failed to send ICMP packet: %v", err)
@@ -253,11 +295,36 @@ func handleOutgoingPackets(conn *net.IPConn, outputChan chan *packetVector, conf
 			return
 		case pv := <-outputChan:
 			log.Printf("Sending packet %d to %s\n", pv.client.count, pv.client.IP)
-			message := fmt.Sprintf("packet echo Seq %d: %s", pv.client.count, pv.packetByteSlice)
+			message := fmt.Sprintf("packet echo Seq %d", pv.client.count)
+
+			//fmt.Printf("Sending message: %s\n", message)
+			fmt.Printf("pv.packetByteSlice length: %d\n", len(pv.packetByteSlice))
 
 			// Send the packet using net.IPConn's WriteTo method
-			sendPacket(conn, pv.destIP, []byte(message), config)
+			sendPacket(conn, pv.destIP, []byte(message), config, pv.packetByteSlice)
 			log.Printf("packet %d to %s Sent.\n", pv.client.count, pv.client.IP)
 		}
 	}
+}
+
+func CalculateChecksum(buffer []byte) uint16 {
+	var cksum uint32 = 0
+
+	// Process 16-bit words (2 bytes each)
+	for i := 0; i < len(buffer)-1; i += 2 {
+		word := binary.BigEndian.Uint16(buffer[i : i+2])
+		cksum += uint32(word)
+	}
+
+	// Handle remaining odd byte, if any
+	if len(buffer)%2 != 0 {
+		cksum += uint32(buffer[len(buffer)-1]) << 8 // Shift last byte to 16 bits
+	}
+
+	// Fold 32-bit sum to 16 bits
+	cksum = (cksum >> 16) + (cksum & 0xffff)
+	cksum += (cksum >> 16)
+
+	// Return one's complement of the final sum
+	return ^uint16(cksum)
 }
