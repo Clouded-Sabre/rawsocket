@@ -1,5 +1,5 @@
-//go:build darwin || freebsd || windows
-// +build darwin freebsd windows
+//go:build linux
+// +build linux
 
 package main
 
@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	rawsocket "github.com/Clouded-Sabre/rawsocket/lib"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 )
@@ -28,8 +27,6 @@ type Config struct {
 func parseArgs() *Config {
 	ip := flag.String("ip", "", "IP address to listen on (server) or connect to (client)")
 	protocol := flag.String("protocol", "tcp", "Protocol to use (tcp/udp)")
-	arpCacheTimeout := flag.Int("arpCacheTimeout", 30, "ARP cache timeout in seconds")
-	arpRequestTimeout := flag.Int("arpRequestTimeout", 60, "ARP request timeout in seconds")
 
 	flag.Parse()
 
@@ -52,10 +49,8 @@ func parseArgs() *Config {
 	}
 
 	return &Config{
-		IP:                listenIP,
-		Protocol:          ipProtocol,
-		ARPRequestTimeout: *arpRequestTimeout,
-		ARPCacheTimeout:   *arpCacheTimeout,
+		IP:       listenIP,
+		Protocol: ipProtocol,
 	}
 }
 
@@ -81,11 +76,8 @@ func main() {
 		return
 	}
 
-	// Create the RawSocketCore
-	core := rawsocket.NewRawSocketCore(config.ARPCacheTimeout, config.ARPRequestTimeout)
-
-	// Listen for incoming connections
-	listener, err := core.ListenIP(config.IP, config.Protocol)
+	// Create the IPConn listener for Linux (standard Go net package)
+	listener, err := net.ListenIP("ip4:"+config.Protocol.String(), &net.IPAddr{IP: config.IP})
 	if err != nil {
 		log.Fatalf("Failed to listen on IP %s: %v", config.IP, err)
 	}
@@ -106,7 +98,27 @@ func main() {
 	wg.Wait()
 }
 
-func sendPacket(conn *rawsocket.RawIPConn, dstIP net.IP, n int, message []byte, config *Config) {
+type packetVector struct {
+	packetByteSlice []byte
+	destIP          net.IP
+	client          *client
+}
+
+type client struct {
+	IP        net.IP
+	inputChan chan []byte
+	count     int
+}
+
+func newClient(IP net.IP) (*client, error) {
+	newclient := &client{
+		IP:        IP,
+		inputChan: make(chan []byte),
+	}
+	return newclient, nil
+}
+
+func sendPacket(conn *net.IPConn, dstIP net.IP, n int, message []byte, config *Config) {
 	switch config.Protocol {
 	case layers.IPProtocolUDP:
 		sendUDPPacket(conn, dstIP, message)
@@ -119,7 +131,7 @@ func sendPacket(conn *rawsocket.RawIPConn, dstIP net.IP, n int, message []byte, 
 	}
 }
 
-func sendUDPPacket(conn *rawsocket.RawIPConn, dstIP net.IP, message []byte) {
+func sendUDPPacket(conn *net.IPConn, dstIP net.IP, message []byte) {
 	// Create the UDP layer
 	udpLayer := &layers.UDP{
 		SrcPort: 54321,
@@ -142,7 +154,7 @@ func sendUDPPacket(conn *rawsocket.RawIPConn, dstIP net.IP, message []byte) {
 	}
 }
 
-func sendTCPPacket(conn *rawsocket.RawIPConn, dstIP net.IP, seq int, message []byte) {
+func sendTCPPacket(conn *net.IPConn, dstIP net.IP, seq int, message []byte) {
 	tcpLayer := &layers.TCP{
 		SrcPort: 54321,
 		DstPort: 12345,
@@ -169,7 +181,7 @@ func sendTCPPacket(conn *rawsocket.RawIPConn, dstIP net.IP, seq int, message []b
 	}
 }
 
-func sendICMPPacket(conn *rawsocket.RawIPConn, dstIP net.IP, message []byte) {
+func sendICMPPacket(conn *net.IPConn, dstIP net.IP, message []byte) {
 	icmpLayer := &layers.ICMPv4{
 		TypeCode: layers.CreateICMPv4TypeCode(8, 0), // Echo request
 	}
@@ -187,47 +199,38 @@ func sendICMPPacket(conn *rawsocket.RawIPConn, dstIP net.IP, message []byte) {
 	}
 }
 
-type client struct {
-	IP        net.IP
-	inputChan chan []byte
-	count     int
-}
-
-func newClient(IP net.IP) (*client, error) {
-	newclient := &client{
-		IP:        IP,
-		inputChan: make(chan []byte),
-	}
-	return newclient, nil
-}
-
-func receivePackets(conn *rawsocket.RawIPConn, outputChan chan *packetVector, stopChan chan struct{}, wg *sync.WaitGroup) {
+func receivePackets(conn *net.IPConn, outputChan chan *packetVector, stopChan chan struct{}, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	buffer := make([]byte, 1024)
+	buffer := make([]byte, 1024) // Buffer to hold incoming packets
 	for {
 		select {
 		case <-stopChan:
-			log.Println("receivePackets got stop signal. Exitting...")
+			log.Println("receivePackets got stop signal. Exiting...")
 			return
 		default:
-			conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // read wait for 500 ms
-			n, addr, err := conn.ReadFrom(buffer)
+			// Set read deadline (this is similar to SetReadDeadline with RawIPConn)
+			conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // wait for 500ms
+
+			n, addr, err := conn.ReadFrom(buffer) // Read raw packet from net.IPConn
 			if err != nil {
-				// Check if the error is a timeout
+				// Handle timeout errors gracefully
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					// Handle timeout error (no data received within the timeout period)
-					continue // Continue waiting for incoming packets or handling closeSignal
+					// Timeout error, continue listening
+					continue
 				}
 				if err == io.EOF {
 					log.Println("Server app got interruption. Stop and exit.")
 					return
 				}
-				fmt.Println("Error reading packet:", err)
+				log.Println("Error reading packet:", err)
 				return
 			}
 
+			// Convert the source address to string
 			srcIP := addr.String()
+
+			// Find or create a new client for the source IP
 			mu.Lock()
 			cl, exists := clientMap[srcIP]
 			if !exists {
@@ -238,16 +241,10 @@ func receivePackets(conn *rawsocket.RawIPConn, outputChan chan *packetVector, st
 			}
 			mu.Unlock()
 
+			// Send the received packet to the client input channel for processing
 			cl.inputChan <- buffer[:n]
 		}
-
 	}
-}
-
-type packetVector struct {
-	packetByteSlice []byte
-	destIP          net.IP
-	client          *client
 }
 
 func handleIncomingPackets(client *client, outputChan chan *packetVector, stopChan chan struct{}, wg *sync.WaitGroup) {
@@ -281,23 +278,6 @@ func handleIncomingPackets(client *client, outputChan chan *packetVector, stopCh
 	}
 }
 
-func handleOutgoingPackets(conn *rawsocket.RawIPConn, outputChan chan *packetVector, config *Config, stopChan chan struct{}, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	for {
-		select {
-		case <-stopChan:
-			log.Println("handleOutgoingPackets got stop signal. Exiting ... ")
-			return
-		case pv := <-outputChan:
-			log.Printf("Sending packet %d to %s\n", pv.client.count, pv.client.IP)
-			message := fmt.Sprintf("packet echo Seq %d: %s", pv.client.count, pv.packetByteSlice)
-			sendPacket(conn, pv.destIP, pv.client.count, []byte(message), config)
-		}
-	}
-
-}
-
 // getL4Payload extracts the L4 payload from the packet
 func getL4Payload(packet gopacket.Packet) []byte {
 	if appLayer := packet.ApplicationLayer(); appLayer != nil {
@@ -323,4 +303,22 @@ func getL4Payload(packet gopacket.Packet) []byte {
 	}
 
 	return nil
+}
+
+func handleOutgoingPackets(conn *net.IPConn, outputChan chan *packetVector, config *Config, stopChan chan struct{}, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	for {
+		select {
+		case <-stopChan:
+			log.Println("handleOutgoingPackets got stop signal. Exiting ... ")
+			return
+		case pv := <-outputChan:
+			log.Printf("Sending packet %d to %s\n", pv.client.count, pv.client.IP)
+			message := fmt.Sprintf("packet echo Seq %d: %s", pv.client.count, pv.packetByteSlice)
+
+			// Send the packet using net.IPConn's WriteTo method
+			sendPacket(conn, pv.destIP, pv.client.count, []byte(message), config)
+		}
+	}
 }
