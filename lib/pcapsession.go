@@ -75,7 +75,8 @@ func (ps *pcapSession) dialIP(srcIP, dstIP net.IP, protocol layers.IPProtocol) (
 	//defer ps.mu.Unlock()
 
 	// construct RawIPConn key and lookup to see if it already exists
-	key := srcIP.To4().String() + ":" + dstIP.To4().String() + ":" + string(protocol)
+	key := srcIP.To4().String() + ":" + dstIP.To4().String() + ":" + protocolToString(protocol)
+	fmt.Println("DialIP: service key is", key)
 	if _, exists := ps.rawIPConnMap.Load(key); exists {
 		return nil, fmt.Errorf("raw ip connection with the same source/destination IP and protocol type already exists. Cannot dial again")
 	}
@@ -104,10 +105,24 @@ func (ps *pcapSession) dialIP(srcIP, dstIP net.IP, protocol layers.IPProtocol) (
 	return conn, nil
 }
 
+func protocolToString(protocol layers.IPProtocol) string {
+	switch protocol {
+	case layers.IPProtocolUDP:
+		return "UDP"
+	case layers.IPProtocolTCP:
+		return "TCP"
+	case layers.IPProtocolICMPv4:
+		return "ICMP"
+	// Add any other protocols you are interested in
+	default:
+		return fmt.Sprintf("protocol_%d", protocol) // Default case for unknown protocols
+	}
+}
+
 func (ps *pcapSession) listenIP(ip net.IP, protocol layers.IPProtocol) (*RawIPConn, error) {
 	// Create a unique key for the RawIPConn
-	connKey := fmt.Sprintf("%s:%s", ip.String(), protocol.String())
-	log.Println("service key is", connKey)
+	connKey := fmt.Sprintf("%s:%s", ip.String(), protocolToString(protocol))
+	log.Println("pcapSession.listenIP: service key is", connKey)
 
 	_, exists := ps.rawIPConnMap.Load(connKey)
 	if exists {
@@ -184,12 +199,20 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 	// Determine the Layer 4 protocol
 	protocol := ipv4.Protocol
 
+	// Debugging: Print all client connections in rawIPConnMap
+	fmt.Println("Debug: Listing all client connections in ps.rawIPConnMap:")
+	ps.rawIPConnMap.Range(func(key, value interface{}) bool {
+		fmt.Printf("Client connection key: %s\n", key)
+		return true // continue iterating
+	})
+
 	// Construct the client connection key for RawIPConn lookup
 	key := ipv4.DstIP.String() + ":" + ipv4.SrcIP.String() + ":" + protocol.String()
 	log.Println("Client key is", key)
 	value, exists := ps.rawIPConnMap.Load(key)
 	if exists {
 		conn := value.(*RawIPConn)
+		fmt.Printf("pcapSession->processIncomingPacket: Forwarding packet to client inputChan of %s\n", key)
 		// Forward the packet to the RawIPConn's input channel
 		conn.inputChan <- packet
 		return
@@ -201,6 +224,7 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 	value, exists = ps.rawIPConnMap.Load(key)
 	if exists {
 		conn := value.(*RawIPConn)
+		fmt.Printf("pcapSession->processIncomingPacket: Forwarding packet to server inputChan of %s\n", key)
 		// Forward the packet to the RawIPConn's input channel
 		conn.inputChan <- packet
 		return

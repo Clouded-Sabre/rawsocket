@@ -54,6 +54,10 @@ func NewRawIPConn(params *RawIPConnParams, config *RawIPConnConfig) (*RawIPConn,
 	return conn, nil
 }
 
+func (conn *RawIPConn) GetProtocol() layers.IPProtocol {
+	return conn.config.protocol
+}
+
 // Read reads data from the RawIPConn.
 func (conn *RawIPConn) Read(buffer []byte) (int, error) {
 	conn.mu.Lock()
@@ -72,7 +76,7 @@ func (conn *RawIPConn) Read(buffer []byte) (int, error) {
 			return 0, fmt.Errorf("connection closed")
 		}
 	} else {
-		// non-blocking read
+		// Non-blocking read
 		select {
 		case packet, ok = <-conn.inputChan:
 			if !ok {
@@ -83,16 +87,17 @@ func (conn *RawIPConn) Read(buffer []byte) (int, error) {
 		}
 	}
 
-	// Extract the L4 payload
-	if ipLayer := (*packet).Layer(layers.LayerTypeIPv4); ipLayer != nil {
-		ip, _ := ipLayer.(*layers.IPv4)
-		if ip.Protocol == conn.config.protocol {
-			copy(buffer, ip.Payload)
-			return len(ip.Payload), nil
-		}
+	// Dereference the packet to access its methods
+	pkt := *packet
+
+	// Extract the Ethernet layer to get the full IP packet
+	if ethLayer := pkt.Layer(layers.LayerTypeEthernet); ethLayer != nil {
+		eth, _ := ethLayer.(*layers.Ethernet)
+		copy(buffer, eth.Payload) // Copy the Ethernet payload (which is the IP packet) into the buffer
+		return len(eth.Payload), nil
 	}
 
-	return 0, fmt.Errorf("no valid L4 payload found")
+	return 0, fmt.Errorf("no valid IP layer found")
 }
 
 // ReadFrom reads a packet from the RawIPConn and returns the payload and the source address.

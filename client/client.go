@@ -31,6 +31,7 @@ const (
 	Red    = "\033[31m"
 	Green  = "\033[32m"
 	Yellow = "\033[33m"
+	Blue   = "\033[34m"
 	Reset  = "\033[0m"
 )
 
@@ -232,7 +233,7 @@ func sendICMPPacket(conn *rawsocket.RawIPConn, message string) {
 	}
 }
 
-func receiveResponses(conn *rawsocket.RawIPConn, stopChan chan struct{}, wg *sync.WaitGroup) {
+/*func receiveResponses(conn *rawsocket.RawIPConn, stopChan chan struct{}, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	buffer := make([]byte, 1024)
@@ -257,43 +258,127 @@ func receiveResponses(conn *rawsocket.RawIPConn, stopChan chan struct{}, wg *syn
 				fmt.Println("Error reading packet:", err)
 				return
 			}
+
+			fmt.Println(Red+"We heard some ip packet of total length", n, Reset)
+
 			// Decode the packet
 			packet := gopacket.NewPacket(buffer[:n], layers.LayerTypeIPv4, gopacket.Default)
 
 			// Extract the L4 payload
 			if payload := getL4Payload(packet); payload != nil {
-				fmt.Printf("Received response: %s\n", string(payload))
+				fmt.Printf(Red+"Received response: %s\n"+Reset, string(payload))
 			} else {
 				fmt.Println("No L4 payload found")
 			}
 		}
 
 	}
+}*/
+
+func receiveResponses(conn *rawsocket.RawIPConn, stopChan chan struct{}, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	buffer := make([]byte, 1024)
+	for {
+		select {
+		case <-stopChan:
+			log.Println("receiveResponses got stop signal. Exiting...")
+			return
+		default:
+			conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // Read wait for 500 ms
+			n, srcAddr, err := conn.ReadFrom(buffer)                     // Use ReadFrom instead of Read
+			if err != nil {
+				// Check if the error is a timeout
+				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					// Handle timeout error (no data received within the timeout period)
+					continue // Continue waiting for incoming packets or handling close signal
+				}
+				if err == io.EOF {
+					log.Println("Server app got interruption. Stop and exit.")
+					return
+				}
+				fmt.Println("Error reading packet:", err)
+				return
+			}
+
+			fmt.Println(Red+"We heard some IP packet of total length", n, "from", srcAddr.String(), Reset)
+
+			// Pass the buffer directly to getL4Payload for decoding
+			if payload := getL4Payload(buffer[:n], conn.GetProtocol()); payload != nil {
+				fmt.Printf(Red+"Received response: %s\n"+Reset, string(payload))
+			} else {
+				fmt.Println("No L4 payload found")
+			}
+		}
+	}
 }
 
+// getL4Payload extracts the L4 payload from the raw byte slice based on the protocol
+func getL4Payload(packetData []byte, protocol layers.IPProtocol) []byte {
+
+	// Check for the correct protocol layer and extract the payload
+	switch protocol {
+	case layers.IPProtocolTCP:
+		// Create a new packet from the raw byte slice
+		packet := gopacket.NewPacket(packetData, layers.LayerTypeTCP, gopacket.Default)
+		if tcpLayer := packet.Layer(layers.LayerTypeTCP); tcpLayer != nil {
+			tcp, _ := tcpLayer.(*layers.TCP)
+			return tcp.Payload
+		}
+	case layers.IPProtocolUDP:
+		// Create a new packet from the raw byte slice
+		packet := gopacket.NewPacket(packetData, layers.LayerTypeUDP, gopacket.Default)
+		if udpLayer := packet.Layer(layers.LayerTypeUDP); udpLayer != nil {
+			udp, _ := udpLayer.(*layers.UDP)
+			return udp.Payload
+		}
+	case layers.IPProtocolICMPv4:
+		// Create a new packet from the raw byte slice
+		packet := gopacket.NewPacket(packetData, layers.LayerTypeICMPv4, gopacket.Default)
+		if icmpLayer := packet.Layer(layers.LayerTypeICMPv4); icmpLayer != nil {
+			icmp, _ := icmpLayer.(*layers.ICMPv4)
+			return icmp.Payload
+		}
+	}
+
+	return nil
+}
+
+/*
 // getL4Payload extracts the L4 payload from the packet
 func getL4Payload(packet gopacket.Packet) []byte {
+	fmt.Println("Packet Layers:")
+	for _, layer := range packet.Layers() {
+		fmt.Printf("Layer type: %s\n", layer.LayerType())
+	}
+
 	if appLayer := packet.ApplicationLayer(); appLayer != nil {
+		fmt.Println("Found application layer")
 		return appLayer.Payload()
 	}
 
 	// Handle TCP layer
 	if tcpLayer := packet.Layer(layers.LayerTypeTCP); tcpLayer != nil {
 		tcp, _ := tcpLayer.(*layers.TCP)
+		fmt.Printf("Found TCP layer with payload: %v\n", tcp.Payload)
 		return tcp.Payload
 	}
 
 	// Handle UDP layer
 	if udpLayer := packet.Layer(layers.LayerTypeUDP); udpLayer != nil {
 		udp, _ := udpLayer.(*layers.UDP)
+		fmt.Printf("Found UDP layer with payload: %v\n", udp.Payload)
 		return udp.Payload
 	}
 
 	// Handle ICMP layer
 	if icmpLayer := packet.Layer(layers.LayerTypeICMPv4); icmpLayer != nil {
 		icmp, _ := icmpLayer.(*layers.ICMPv4)
+		fmt.Printf("Found ICMP layer with payload: %v\n", icmp.Payload)
 		return icmp.Payload
 	}
 
+	fmt.Println("No L4 layer found in packet")
 	return nil
 }
+*/
