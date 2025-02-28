@@ -46,6 +46,58 @@ func parseArgs() *Config {
 var clientMap = make(map[string]*client)
 var mu sync.Mutex
 
+/*func applyIptablesRule(sourceIP net.IP, port int) error {
+	cmd := exec.Command("sudo", "iptables", "-A", "OUTPUT",
+		"-p", "tcp",
+		"-s", sourceIP.String(),
+		"--sport", fmt.Sprintf("%d", port),
+		"--tcp-flags", "RST", "RST",
+		"-j", "REJECT")
+
+	err := cmd.Run()
+	if err != nil {
+		return fmt.Errorf("failed to apply iptables rule: %v", err)
+	}
+	return nil
+}
+
+func removeIptablesRule(sourceIP net.IP, port int) error {
+	cmd := exec.Command("sudo", "iptables", "-D", "OUTPUT",
+		"-p", "tcp",
+		"-s", sourceIP.String(),
+		"--sport", fmt.Sprintf("%d", port),
+		"--tcp-flags", "RST", "RST",
+		"-j", "REJECT")
+
+	err := cmd.Run()
+	if err != nil {
+		return fmt.Errorf("failed to remove iptables rule: %v", err)
+	}
+	return nil
+}
+*/
+
+func setupTcpServer(ip string, port int) (*net.TCPListener, error) {
+	// Create a TCP socket and bind it to the desired IP address and port
+	address := fmt.Sprintf("%s:%d", ip, port)
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create listener on %s: %v", address, err)
+	}
+
+	// Don't accept any connections, just call Listen()
+	tcpListener, ok := listener.(*net.TCPListener)
+	if !ok {
+		return nil, fmt.Errorf("failed to cast listener to TCPListener")
+	}
+
+	// This makes the kernel aware of the port and prevents RST from being sent
+	tcpListener.SetDeadline(time.Now().Add(1 * time.Second)) // optional, just to make it a valid listener
+
+	// Return the listener
+	return tcpListener, nil
+}
+
 func main() {
 	config := parseArgs()
 	if config == nil {
@@ -59,7 +111,31 @@ func main() {
 	}
 	defer listener.Close()
 
-	fmt.Printf("Server listening on %s:%s\n", config.IP, config.Protocol)
+	// Apply the iptables rule to prevent RST packets from being sent out
+	serverPort := 54321 // fixed port for now, can be passed via config if needed
+	// Only apply iptables rule if protocol is TCP
+	if config.Protocol == "tcp" {
+		/*err = applyIptablesRule(config.IP, serverPort)
+		if err != nil {
+			log.Fatalf("Failed to apply iptables rule: %v", err)
+		}
+		defer func() {
+			err := removeIptablesRule(config.IP, serverPort)
+			if err != nil {
+				log.Printf("Failed to remove iptables rule: %v", err)
+			}
+		}()*/
+		listener, err := setupTcpServer(config.IP.String(), serverPort)
+		if err != nil {
+			log.Fatalf("Error setting up server: %v", err)
+		}
+		defer listener.Close()
+
+		// Keep the server running, but do not accept any connections
+		fmt.Printf("Server is listening on port %d but not accepting connections\n", serverPort)
+	}
+
+	fmt.Printf("Rawsocket Server is now listening on %s:%s\n", config.IP, config.Protocol)
 
 	wg := sync.WaitGroup{}
 	stopChan := make(chan struct{})
@@ -165,14 +241,60 @@ func sendTCPPacket(conn *net.IPConn, dstIP net.IP, message []byte, originalPacke
 	srcPort := uint16(originalPacket[0])<<8 | uint16(originalPacket[1])
 	dstPort := uint16(originalPacket[2])<<8 | uint16(originalPacket[3])
 
-	// Swap ports
-	tcpHeader := make([]byte, 20)
+	// Initialize a TCP header (minimum size of 20 bytes)
+	tcpHeader := make([]byte, 20) // Minimum TCP header size
+
+	// Fill in the source and destination ports
 	tcpHeader[0] = byte(dstPort >> 8)
 	tcpHeader[1] = byte(dstPort & 0xFF)
 	tcpHeader[2] = byte(srcPort >> 8)
 	tcpHeader[3] = byte(srcPort & 0xFF)
 
-	// Send the TCP packet (skip checksum calculation)
+	// Set the Data Offset (TCP header length in 4-byte words)
+	tcpHeader[12] = 0x50 // 0x50 = 5 in decimal, meaning the header is 20 bytes long
+
+	// Set the Flags (e.g., ACK flag is set)
+	tcpHeader[13] = 0x10 // ACK flag set
+
+	// Set the sequence and acknowledgment numbers (example values)
+	binary.BigEndian.PutUint32(tcpHeader[4:8], 12345)  // Sequence Number
+	binary.BigEndian.PutUint32(tcpHeader[8:12], 67890) // Acknowledgment Number
+
+	// Set the window size (arbitrary value)
+	binary.BigEndian.PutUint16(tcpHeader[14:16], 0xFFFF)
+
+	// Optionally set the checksum to 0 initially (this will be calculated later)
+	tcpHeader[16] = 0
+	tcpHeader[17] = 0
+
+	// Calculate the TCP Length: 20 bytes (header) + length of message
+	tcpLength := uint16(len(tcpHeader) + len(message))
+
+	// Pseudo-header for checksum calculation (same as UDP)
+	pseudoHeader := make([]byte, 12)
+	// Get the source IP from the conn's LocalAddr() method
+	localAddr := conn.LocalAddr().(*net.IPAddr) // cast to *net.IPAddr
+	copy(pseudoHeader[0:4], localAddr.IP.To4()) // Source IP from the listening IP
+
+	// Destination IP (4 bytes)
+	copy(pseudoHeader[4:8], dstIP.To4()) // Destination IP
+	// Reserved (1 byte), Protocol (1 byte), TCP Length (2 bytes)
+	pseudoHeader[8] = 0 // Reserved byte
+	pseudoHeader[9] = 6 // Protocol (6 for TCP)
+	binary.BigEndian.PutUint16(pseudoHeader[10:12], tcpLength)
+
+	// Concatenate pseudo-header, TCP header, and data for checksum calculation
+	dataForChecksum := append(pseudoHeader, tcpHeader...)
+	dataForChecksum = append(dataForChecksum, message...)
+
+	// Calculate the checksum
+	checksum := CalculateChecksum(dataForChecksum)
+
+	// Set the checksum in the TCP header
+	tcpHeader[16] = byte(checksum >> 8)
+	tcpHeader[17] = byte(checksum & 0xFF)
+
+	// Send the TCP packet (with checksum in the header)
 	_, err := conn.WriteTo(append(tcpHeader, message...), &net.IPAddr{IP: dstIP})
 	if err != nil {
 		log.Fatalf("Failed to send TCP packet: %v", err)
