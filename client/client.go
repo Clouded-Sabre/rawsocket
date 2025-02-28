@@ -233,48 +233,6 @@ func sendICMPPacket(conn *rawsocket.RawIPConn, message string) {
 	}
 }
 
-/*func receiveResponses(conn *rawsocket.RawIPConn, stopChan chan struct{}, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	buffer := make([]byte, 1024)
-	for {
-		select {
-		case <-stopChan:
-			log.Println("receiveResponses got stop signal. Exitting...")
-			return
-		default:
-			conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // read wait for 500 ms
-			n, err := conn.Read(buffer)
-			if err != nil {
-				// Check if the error is a timeout
-				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
-					// Handle timeout error (no data received within the timeout period)
-					continue // Continue waiting for incoming packets or handling closeSignal
-				}
-				if err == io.EOF {
-					log.Println("Server app got interruption. Stop and exit.")
-					return
-				}
-				fmt.Println("Error reading packet:", err)
-				return
-			}
-
-			fmt.Println(Red+"We heard some ip packet of total length", n, Reset)
-
-			// Decode the packet
-			packet := gopacket.NewPacket(buffer[:n], layers.LayerTypeIPv4, gopacket.Default)
-
-			// Extract the L4 payload
-			if payload := getL4Payload(packet); payload != nil {
-				fmt.Printf(Red+"Received response: %s\n"+Reset, string(payload))
-			} else {
-				fmt.Println("No L4 payload found")
-			}
-		}
-
-	}
-}*/
-
 func receiveResponses(conn *rawsocket.RawIPConn, stopChan chan struct{}, wg *sync.WaitGroup) {
 	defer wg.Done()
 
@@ -305,7 +263,7 @@ func receiveResponses(conn *rawsocket.RawIPConn, stopChan chan struct{}, wg *syn
 
 			// Pass the buffer directly to getL4Payload for decoding
 			if payload := getL4Payload(buffer[:n], conn.GetProtocol()); payload != nil {
-				fmt.Printf(Red+"Received response: %s\n"+Reset, string(payload))
+				fmt.Printf(Blue+"Received response: %s\n"+Reset, string(payload))
 			} else {
 				fmt.Println("No L4 payload found")
 			}
@@ -344,9 +302,51 @@ func getL4Payload(packetData []byte, protocol layers.IPProtocol) []byte {
 	return nil
 }
 
-/*
+/* alternative version of receiveResponses using Read function
+func receiveResponses(conn *rawsocket.RawIPConn, stopChan chan struct{}, wg *sync.WaitGroup) {
+	defer wg.Done()
+
+	buffer := make([]byte, 1024)
+	for {
+		select {
+		case <-stopChan:
+			log.Println("receiveResponses got stop signal. Exitting...")
+			return
+		default:
+			conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // read wait for 500 ms
+			n, err := conn.Read(buffer)
+			if err != nil {
+				// Check if the error is a timeout
+				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+					// Handle timeout error (no data received within the timeout period)
+					continue // Continue waiting for incoming packets or handling closeSignal
+				}
+				if err == io.EOF {
+					log.Println("Server app got interruption. Stop and exit.")
+					return
+				}
+				fmt.Println("Error reading packet:", err)
+				return
+			}
+
+			fmt.Println(Red+"We heard some ip packet of total length", n, Reset)
+
+			// Extract the L4 payload
+			if payload := getL4Payload(buffer[:n]); payload != nil {
+				fmt.Printf(Red+"Received response: %s\n"+Reset, string(payload))
+			} else {
+				fmt.Println("No L4 payload found")
+			}
+		}
+	}
+}
+
+// use this version when using Read function
 // getL4Payload extracts the L4 payload from the packet
-func getL4Payload(packet gopacket.Packet) []byte {
+func getL4Payload(packetBytes []byte]) []byte {
+     // Decode the packet
+	packet := gopacket.NewPacket(packetBytes, layers.LayerTypeIPv4, gopacket.Default)
+
 	fmt.Println("Packet Layers:")
 	for _, layer := range packet.Layers() {
 		fmt.Printf("Layer type: %s\n", layer.LayerType())
