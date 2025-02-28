@@ -9,6 +9,8 @@ import (
 	"io"
 	"log"
 	"net"
+	"os"
+	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -95,10 +97,23 @@ func stringToIPProtocol(proto string) (layers.IPProtocol, error) {
 	}
 }
 
+// 常量定义（包级别作用域）
+const (
+	srcPort = 12345        // 源端口
+	dstPort = 54321        // 目标端口
+	anchor  = "rst_filter" // PF锚点名（此处正确定义）
+)
+
 func main() {
 	config := parseArgs()
 	if config == nil {
 		return
+	}
+
+	// 检查是否以root权限运行
+	if os.Getuid() != 0 {
+		fmt.Println("此程序必须以root权限运行，请使用sudo。")
+		os.Exit(1)
 	}
 
 	// Create the RawSocketCore
@@ -107,12 +122,121 @@ func main() {
 	startClient(core, config)
 }
 
+// ================= PF 控制函数 =================
+func isPFEnabled() (bool, error) {
+	output, err := exec.Command("pfctl", "-s", "info").CombinedOutput()
+	if err != nil {
+		return false, fmt.Errorf("pfctl检查失败: %v\n输出: %s", err, string(output))
+	}
+	return strings.Contains(string(output), "Status: Enabled"), nil
+}
+
+func pfManageAnchor(anchor string, create bool) error {
+	action := "anchor"
+	if !create {
+		action = "no anchor"
+	}
+	cmd := exec.Command("pfctl", "-a", ".", "-f", "-")
+	cmd.Stdin = strings.NewReader(fmt.Sprintf("%s \"%s\"\n", action, anchor))
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("锚点操作失败: %v\n命令输出: %s", err, string(output))
+	}
+	return nil
+}
+
+func pfFlushRules(anchor string) error {
+	cmd := exec.Command("pfctl", "-a", anchor, "-F", "rules")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("清理规则失败: %v\n输出: %s", err, string(output))
+	}
+	return nil
+}
+
+func pfLoadRules(anchor, rules string) error {
+	cmd := exec.Command("pfctl", "-a", anchor, "-f", "-")
+	cmd.Stdin = strings.NewReader(rules)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("加载规则失败: %v\n命令输出: %s", err, string(output))
+	}
+	return nil
+}
+
+// ================= 验证函数 =================
+func verifyRuleExactMatch(anchor, expectedRule string) error {
+	cmd := exec.Command("pfctl", "-a", anchor, "-s", "rules")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("规则查询失败: %v", err)
+	}
+
+	// 严格匹配规则（包括换行符）
+	expected := strings.TrimSpace(expectedRule)
+	current := strings.TrimSpace(string(output))
+	if !strings.Contains(current, expected) {
+		return fmt.Errorf("规则不匹配\n当前规则:\n%s\n预期规则:\n%s",
+			current, expected)
+	}
+	return nil
+}
+
 func startClient(core *rawsocket.RawSocketCore, config *Config) {
 	conn, err := core.DialIP(config.Protocol, config.sourceIP, config.serverIP)
 	if err != nil {
 		log.Fatalf("Failed to dial to server IP %s: %v", config.serverIP, err)
 	}
 	defer conn.Close()
+
+	// Extract the dynamic source port from the connection (your DialIP should give you this somehow)
+	localAddr := config.sourceIP
+	dstAddr := config.serverIP
+
+	if config.Protocol == layers.IPProtocolTCP {
+		// 1. 检查PF是否启用
+		if enabled, err := isPFEnabled(); err != nil || !enabled {
+			fmt.Printf("PF服务未启用: %v\n", err)
+			os.Exit(1)
+		}
+
+		// 2. 动态管理锚点
+		if err := pfManageAnchor(anchor, true); err != nil {
+			fmt.Printf("锚点初始化失败: %v\n", err)
+			os.Exit(1)
+		}
+		defer pfManageAnchor(anchor, false) // 确保程序退出时清理
+
+		// 3. 清理旧规则
+		if err := pfFlushRules(anchor); err != nil {
+			fmt.Printf("清理旧规则失败: %v\n", err)
+			os.Exit(1)
+		}
+
+		// 4. 构造精准规则（带日志记录）
+		rule := fmt.Sprintf(
+			"block drop out inet proto tcp "+
+				"from %s port = %d to %s port = %d flags R/R\n",
+			localAddr.String(), srcPort, dstAddr.String(), dstPort,
+		)
+		fmt.Println("构造的规则：", rule)
+
+		// 5. 添加规则
+		if err := pfLoadRules(anchor, rule); err != nil {
+			fmt.Printf("规则添加失败: %v\n", err)
+			os.Exit(1)
+		}
+		defer pfFlushRules(anchor) // 程序退出时清理规则
+
+		// 6. 严格验证规则
+		if err := verifyRuleExactMatch(anchor, rule); err != nil {
+			fmt.Printf("规则验证失败: %v\n", err)
+			os.Exit(1)
+		}
+
+		// 7. 保持运行
+		fmt.Printf("已成功加载规则：\n%s\n等待 Ctrl+C 退出...\n", strings.TrimSpace(rule))
+	}
 
 	var (
 		wg       = sync.WaitGroup{}
@@ -209,7 +333,11 @@ func sendTCPPacket(conn *rawsocket.RawIPConn, seq int, config *Config, message s
 		log.Fatalf("Failed to serialize TCP packet: %v", err)
 	}
 
-	_, err = conn.Write(buffer.Bytes())
+	// Get the raw packet bytes (IP header + TCP layer + payload)
+	packetData := buffer.Bytes()
+
+	// Send the packet using the RawIPConn
+	_, err = conn.Write(packetData)
 	if err != nil {
 		log.Fatalf("Failed to send TCP packet: %v", err)
 	}
