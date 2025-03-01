@@ -9,3 +9,5 @@ require (
 )
 
 require golang.org/x/sys v0.30.0
+
+require github.com/imgk/divert-go v0.0.0-20220205193416-faaa83c2c10a

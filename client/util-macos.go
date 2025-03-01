@@ -15,10 +15,6 @@ const (
 	anchor = "rst_filter" // PF anchor name (correctly defined here)
 )
 
-func isAdmin() bool {
-	return os.Getuid() == 0
-}
-
 func applyFilteringRules(srcAddr, dstAddr net.IP, srcPort, dstPort int) error {
 	// 1. Check if PF is enabled
 	if enabled, err := isPFEnabled(); err != nil || !enabled {
@@ -127,4 +123,8 @@ func verifyRuleExactMatch(anchor, expectedRule string) error {
 			current, expected)
 	}
 	return nil
+}
+
+func isAdmin() bool {
+	return os.Getuid() == 0
 }
