@@ -97,11 +97,11 @@ func stringToIPProtocol(proto string) (layers.IPProtocol, error) {
 	}
 }
 
-// 常量定义（包级别作用域）
+// Constant definitions (package-level scope)
 const (
-	srcPort = 12345        // 源端口
-	dstPort = 54321        // 目标端口
-	anchor  = "rst_filter" // PF锚点名（此处正确定义）
+	srcPort = 12345        // Source port
+	dstPort = 54321        // Destination port
+	anchor  = "rst_filter" // PF anchor name (correctly defined here)
 )
 
 func main() {
@@ -110,9 +110,9 @@ func main() {
 		return
 	}
 
-	// 检查是否以root权限运行
+	// Check if running as root
 	if os.Getuid() != 0 {
-		fmt.Println("此程序必须以root权限运行，请使用sudo。")
+		fmt.Println("This program must be run as root, please use sudo.")
 		os.Exit(1)
 	}
 
@@ -122,11 +122,11 @@ func main() {
 	startClient(core, config)
 }
 
-// ================= PF 控制函数 =================
+// ================= PF Control Functions =================
 func isPFEnabled() (bool, error) {
 	output, err := exec.Command("pfctl", "-s", "info").CombinedOutput()
 	if err != nil {
-		return false, fmt.Errorf("pfctl检查失败: %v\n输出: %s", err, string(output))
+		return false, fmt.Errorf("macos PFctl check failed: %v\nOutput: %s", err, string(output))
 	}
 	return strings.Contains(string(output), "Status: Enabled"), nil
 }
@@ -140,7 +140,7 @@ func pfManageAnchor(anchor string, create bool) error {
 	cmd.Stdin = strings.NewReader(fmt.Sprintf("%s \"%s\"\n", action, anchor))
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("锚点操作失败: %v\n命令输出: %s", err, string(output))
+		return fmt.Errorf("macos pf anchor operation failed: %v\nCommand output: %s", err, string(output))
 	}
 	return nil
 }
@@ -149,7 +149,7 @@ func pfFlushRules(anchor string) error {
 	cmd := exec.Command("pfctl", "-a", anchor, "-F", "rules")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("清理规则失败: %v\n输出: %s", err, string(output))
+		return fmt.Errorf("failed to clear macos pf rules: %v\nOutput: %s", err, string(output))
 	}
 	return nil
 }
@@ -159,24 +159,24 @@ func pfLoadRules(anchor, rules string) error {
 	cmd.Stdin = strings.NewReader(rules)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("加载规则失败: %v\n命令输出: %s", err, string(output))
+		return fmt.Errorf("failed to load macos pf rules: %v\nCommand output: %s", err, string(output))
 	}
 	return nil
 }
 
-// ================= 验证函数 =================
+// ================= Verification Functions =================
 func verifyRuleExactMatch(anchor, expectedRule string) error {
 	cmd := exec.Command("pfctl", "-a", anchor, "-s", "rules")
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("规则查询失败: %v", err)
+		return fmt.Errorf("failed to query macos pf rules: %v", err)
 	}
 
-	// 严格匹配规则（包括换行符）
+	// Strictly match the rule (including line breaks)
 	expected := strings.TrimSpace(expectedRule)
 	current := strings.TrimSpace(string(output))
 	if !strings.Contains(current, expected) {
-		return fmt.Errorf("规则不匹配\n当前规则:\n%s\n预期规则:\n%s",
+		return fmt.Errorf("rule does not match\nmacos pf current rules:\n%s\nExpected rule:\n%s",
 			current, expected)
 	}
 	return nil
@@ -194,55 +194,55 @@ func startClient(core *rawsocket.RawSocketCore, config *Config) {
 	dstAddr := config.serverIP
 
 	if config.Protocol == layers.IPProtocolTCP {
-		// 1. 检查PF是否启用
+		// 1. Check if PF is enabled
 		if enabled, err := isPFEnabled(); err != nil || !enabled {
-			fmt.Printf("PF服务未启用: %v\n", err)
+			fmt.Printf("PF service is not enabled: %v\n", err)
 			os.Exit(1)
 		}
 
-		// 2. 动态管理锚点
+		// 2. Dynamically manage the anchor
 		if err := pfManageAnchor(anchor, true); err != nil {
-			fmt.Printf("锚点初始化失败: %v\n", err)
+			fmt.Printf("Failed to initialize anchor: %v\n", err)
 			os.Exit(1)
 		}
-		defer pfManageAnchor(anchor, false) // 确保程序退出时清理
+		defer pfManageAnchor(anchor, false) // Ensure anchor is removed on exit
 
-		// 3. 清理旧规则
+		// 3. Clear old rules
 		if err := pfFlushRules(anchor); err != nil {
-			fmt.Printf("清理旧规则失败: %v\n", err)
+			fmt.Printf("Failed to clear old rules: %v\n", err)
 			os.Exit(1)
 		}
 
-		// 4. 构造精准规则（带日志记录）
+		// 4. Construct precise rule (with logging)
 		rule := fmt.Sprintf(
 			"block drop out inet proto tcp "+
 				"from %s port = %d to %s port = %d flags R/R\n",
 			localAddr.String(), srcPort, dstAddr.String(), dstPort,
 		)
-		fmt.Println("构造的规则：", rule)
+		fmt.Println("Constructed rule:", rule)
 
-		// 5. 添加规则
+		// 5. Add rule
 		if err := pfLoadRules(anchor, rule); err != nil {
-			fmt.Printf("规则添加失败: %v\n", err)
+			fmt.Printf("Failed to add rule: %v\n", err)
 			os.Exit(1)
 		}
-		defer pfFlushRules(anchor) // 程序退出时清理规则
+		defer pfFlushRules(anchor) // Clear rules on exit
 
-		// 6. 严格验证规则
+		// 6. Strictly verify rule
 		if err := verifyRuleExactMatch(anchor, rule); err != nil {
-			fmt.Printf("规则验证失败: %v\n", err)
+			fmt.Printf("Rule verification failed: %v\n", err)
 			os.Exit(1)
 		}
 
-		// 7. 保持运行
-		fmt.Printf("已成功加载规则：\n%s\n等待 Ctrl+C 退出...\n", strings.TrimSpace(rule))
+		// 7. Keep running
+		fmt.Printf("Successfully loaded rule:\n%s\nWaiting for Ctrl+C to exit...\n", strings.TrimSpace(rule))
 	}
 
 	var (
 		wg       = sync.WaitGroup{}
 		stopChan = make(chan struct{})
 	)
-	// start Handle incoming responses first to avoid possible response miss
+	// Start handling incoming responses first to avoid missing responses
 	wg.Add(1)
 	go receiveResponses(conn, stopChan, &wg)
 
@@ -256,7 +256,7 @@ func startClient(core *rawsocket.RawSocketCore, config *Config) {
 	timeout := time.Duration(n*interval+5000) * time.Millisecond // n*interval + 5 seconds
 	go func() {
 		time.Sleep(timeout)
-		log.Println("Timeout reached. Stopping go routines and exit.")
+		log.Println("Timeout reached. Stopping goroutines and exiting.")
 		close(stopChan)
 	}()
 
