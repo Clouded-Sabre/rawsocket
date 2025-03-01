@@ -10,7 +10,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"time"
@@ -99,9 +98,8 @@ func stringToIPProtocol(proto string) (layers.IPProtocol, error) {
 
 // Constant definitions (package-level scope)
 const (
-	srcPort = 12345        // Source port
-	dstPort = 54321        // Destination port
-	anchor  = "rst_filter" // PF anchor name (correctly defined here)
+	srcPort = 12345 // Source port
+	dstPort = 54321 // Destination port
 )
 
 func main() {
@@ -111,7 +109,7 @@ func main() {
 	}
 
 	// Check if running as root
-	if os.Getuid() != 0 {
+	if !isAdmin() {
 		fmt.Println("This program must be run as root, please use sudo.")
 		os.Exit(1)
 	}
@@ -120,66 +118,6 @@ func main() {
 	core := rawsocket.NewRawSocketCore(config.ARPCacheTimeout, config.ARPRequestTimeout)
 
 	startClient(core, config)
-}
-
-// ================= PF Control Functions =================
-func isPFEnabled() (bool, error) {
-	output, err := exec.Command("pfctl", "-s", "info").CombinedOutput()
-	if err != nil {
-		return false, fmt.Errorf("macos PFctl check failed: %v\nOutput: %s", err, string(output))
-	}
-	return strings.Contains(string(output), "Status: Enabled"), nil
-}
-
-func pfManageAnchor(anchor string, create bool) error {
-	action := "anchor"
-	if !create {
-		action = "no anchor"
-	}
-	cmd := exec.Command("pfctl", "-a", ".", "-f", "-")
-	cmd.Stdin = strings.NewReader(fmt.Sprintf("%s \"%s\"\n", action, anchor))
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("macos pf anchor operation failed: %v\nCommand output: %s", err, string(output))
-	}
-	return nil
-}
-
-func pfFlushRules(anchor string) error {
-	cmd := exec.Command("pfctl", "-a", anchor, "-F", "rules")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to clear macos pf rules: %v\nOutput: %s", err, string(output))
-	}
-	return nil
-}
-
-func pfLoadRules(anchor, rules string) error {
-	cmd := exec.Command("pfctl", "-a", anchor, "-f", "-")
-	cmd.Stdin = strings.NewReader(rules)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to load macos pf rules: %v\nCommand output: %s", err, string(output))
-	}
-	return nil
-}
-
-// ================= Verification Functions =================
-func verifyRuleExactMatch(anchor, expectedRule string) error {
-	cmd := exec.Command("pfctl", "-a", anchor, "-s", "rules")
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("failed to query macos pf rules: %v", err)
-	}
-
-	// Strictly match the rule (including line breaks)
-	expected := strings.TrimSpace(expectedRule)
-	current := strings.TrimSpace(string(output))
-	if !strings.Contains(current, expected) {
-		return fmt.Errorf("rule does not match\nmacos pf current rules:\n%s\nExpected rule:\n%s",
-			current, expected)
-	}
-	return nil
 }
 
 func startClient(core *rawsocket.RawSocketCore, config *Config) {
@@ -194,48 +132,10 @@ func startClient(core *rawsocket.RawSocketCore, config *Config) {
 	dstAddr := config.serverIP
 
 	if config.Protocol == layers.IPProtocolTCP {
-		// 1. Check if PF is enabled
-		if enabled, err := isPFEnabled(); err != nil || !enabled {
-			fmt.Printf("PF service is not enabled: %v\n", err)
-			os.Exit(1)
+		if applyFilteringRules(localAddr, dstAddr, srcPort, dstPort) != nil {
+			log.Fatalf("Failed to apply filtering rules")
 		}
-
-		// 2. Dynamically manage the anchor
-		if err := pfManageAnchor(anchor, true); err != nil {
-			fmt.Printf("Failed to initialize anchor: %v\n", err)
-			os.Exit(1)
-		}
-		defer pfManageAnchor(anchor, false) // Ensure anchor is removed on exit
-
-		// 3. Clear old rules
-		if err := pfFlushRules(anchor); err != nil {
-			fmt.Printf("Failed to clear old rules: %v\n", err)
-			os.Exit(1)
-		}
-
-		// 4. Construct precise rule (with logging)
-		rule := fmt.Sprintf(
-			"block drop out inet proto tcp "+
-				"from %s port = %d to %s port = %d flags R/R\n",
-			localAddr.String(), srcPort, dstAddr.String(), dstPort,
-		)
-		fmt.Println("Constructed rule:", rule)
-
-		// 5. Add rule
-		if err := pfLoadRules(anchor, rule); err != nil {
-			fmt.Printf("Failed to add rule: %v\n", err)
-			os.Exit(1)
-		}
-		defer pfFlushRules(anchor) // Clear rules on exit
-
-		// 6. Strictly verify rule
-		if err := verifyRuleExactMatch(anchor, rule); err != nil {
-			fmt.Printf("Rule verification failed: %v\n", err)
-			os.Exit(1)
-		}
-
-		// 7. Keep running
-		fmt.Printf("Successfully loaded rule:\n%s\nWaiting for Ctrl+C to exit...\n", strings.TrimSpace(rule))
+		defer removeFilteringRules()
 	}
 
 	var (
