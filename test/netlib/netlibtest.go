@@ -90,7 +90,7 @@ func main() {
 		return
 	}
 
-	core := rawsocket.NewRawSocketCore(config.ARPCacheTimeout, config.ARPRequestTimeout)
+	core := rawsocket.NewRawSocketCore(config.ARPCacheTimeout, config.ARPRequestTimeout, true)
 
 	// Listen for incoming raw connections
 	rawListener, err := core.ListenIP(config.IP, config.Protocol)

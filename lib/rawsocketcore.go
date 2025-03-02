@@ -25,7 +25,9 @@ type RawSocketCore struct {
 	isClosed            bool
 }
 
-func NewRawSocketCore(arpCacheTimeout, arpRequestTimeout int) *RawSocketCore {
+var Debug = false
+
+func NewRawSocketCore(arpCacheTimeout, arpRequestTimeout int, debug bool) *RawSocketCore {
 	core := &RawSocketCore{
 		pcapSessionMap:      make(map[string]*pcapSession),
 		arpCacheTimeout:     time.Duration(arpCacheTimeout) * time.Second,
@@ -35,6 +37,8 @@ func NewRawSocketCore(arpCacheTimeout, arpRequestTimeout int) *RawSocketCore {
 		stopChan:            make(chan struct{}),
 		wg:                  sync.WaitGroup{},
 	}
+
+	Debug = debug
 
 	core.wg.Add(1)
 	go core.handlePcapSessionClose()
@@ -64,7 +68,9 @@ func (core *RawSocketCore) DialIP(protocol layers.IPProtocol, srcIP, dstIP net.I
 		}
 	}
 	if gatewayIP != nil {
-		log.Println("interface name is", iface.Name, " Gateway IP is", gatewayIP, " source ip is", srcIP)
+		if Debug {
+			log.Println("interface name is", iface.Name, " Gateway IP is", gatewayIP, " source ip is", srcIP)
+		}
 	} else {
 		log.Println("interface name is", iface.Name, " Gateway IP is <nil>", " source ip is", srcIP)
 	}

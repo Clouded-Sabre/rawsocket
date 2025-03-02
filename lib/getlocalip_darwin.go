@@ -85,7 +85,9 @@ func GetLocalIP(dstIP net.IP) (net.IP, *net.Interface, net.IP, error) {
 		}
 		if !subnet.Contains(dstIP) { // default route
 			if gwAddr, ok := bestRoute.Addrs[syscall.RTAX_GATEWAY].(*route.Inet4Addr); ok {
-				fmt.Println("Gateway IP of the default route is", bestRoute.Addrs[syscall.RTAX_GATEWAY].(*route.Inet4Addr).IP)
+				if Debug {
+					fmt.Println("Gateway IP of the default route is", bestRoute.Addrs[syscall.RTAX_GATEWAY].(*route.Inet4Addr).IP)
+				}
 				gatewayIP = net.IP(gwAddr.IP[:])
 			}
 		}
@@ -117,22 +119,30 @@ func getInterfaceIP(rtMsg *route.RouteMessage, dstIP net.IP) (net.IP, *net.Inter
 		return nil, nil, err
 	}
 
-	fmt.Println("Addresses are:", addrs)
+	if Debug {
+		fmt.Println("Addresses are:", addrs)
+	}
 	for _, addr := range addrs {
 		if ipNet, ok := addr.(*net.IPNet); ok {
 			if ipNet.IP.To4() != nil {
-				fmt.Println("ipNet is:", ipNet)
+				if Debug {
+					fmt.Println("ipNet is:", ipNet)
+				}
 				var gatewayIP net.IP
 				if rtMsg.Addrs[syscall.RTAX_GATEWAY] != nil {
 					gatewayIP = addrToIP(rtMsg.Addrs[syscall.RTAX_GATEWAY])
 				}
 				if gatewayIP != nil {
-					fmt.Println("Gateway IP is:", gatewayIP)
+					if Debug {
+						fmt.Println("Gateway IP is:", gatewayIP)
+					}
 					if ipNet.Contains(gatewayIP) {
 						return ipNet.IP, iface, nil
 					}
 				} else {
-					fmt.Println("dstIP:", dstIP)
+					if Debug {
+						fmt.Println("dstIP:", dstIP)
+					}
 					if ipNet.Contains(dstIP) {
 						return ipNet.IP, iface, nil
 					}

@@ -71,11 +71,16 @@ func readARP(handle *pcap.Handle, iface *net.Interface, targetIP net.IP, arpRepl
 // writeARP writes an ARP request for the target IP to the pcap handle.
 func writeARP(handle *pcap.Handle, iface *net.Interface, targetIP net.IP) error {
 	// Get the interface IP address
-	log.Printf("iface name is: %s     target IP: %s", iface.Name, targetIP)
+	if Debug {
+		log.Printf("iface name is: %s     target IP: %s", iface.Name, targetIP)
+	}
+
 	var ifaceIP net.IP
 	if addrs, err := iface.Addrs(); err == nil {
 		for _, addr := range addrs {
-			log.Println("addr: ", addr)
+			if Debug {
+				log.Println("addr: ", addr)
+			}
 			if ipnet, ok := addr.(*net.IPNet); ok {
 				if ipnet.Contains(targetIP) {
 					if ip4 := ipnet.IP.To4(); ip4 != nil {
@@ -143,13 +148,17 @@ func getPcapDeviceName(iface *net.Interface) string {
 			}
 		}
 	}
-	log.Printf("interface %s's ip list: %+v", iface.Name, ifaceIPs)
+	if Debug {
+		log.Printf("interface %s's ip list: %+v", iface.Name, ifaceIPs)
+	}
 
 	for _, device := range devices {
 		for _, address := range device.Addresses {
 			ip := address.IP.To4()
 			if ip != nil {
-				log.Printf("Pcap device %s ip: %s\n", device.Name, ip)
+				if Debug {
+					log.Printf("Pcap device %s ip: %s\n", device.Name, ip)
+				}
 				for _, ifaceIP := range ifaceIPs {
 					if ifaceIP.String() == ip.String() {
 						return device.Name

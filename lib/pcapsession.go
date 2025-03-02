@@ -76,7 +76,9 @@ func (ps *pcapSession) dialIP(srcIP, dstIP net.IP, protocol layers.IPProtocol) (
 
 	// construct RawIPConn key and lookup to see if it already exists
 	key := srcIP.To4().String() + ":" + dstIP.To4().String() + ":" + protocolToString(protocol)
-	fmt.Println("DialIP: service key is", key)
+	if Debug {
+		fmt.Println("DialIP: service key is", key)
+	}
 	if _, exists := ps.rawIPConnMap.Load(key); exists {
 		return nil, fmt.Errorf("raw ip connection with the same source/destination IP and protocol type already exists. Cannot dial again")
 	}
@@ -122,7 +124,9 @@ func protocolToString(protocol layers.IPProtocol) string {
 func (ps *pcapSession) listenIP(ip net.IP, protocol layers.IPProtocol) (*RawIPConn, error) {
 	// Create a unique key for the RawIPConn
 	connKey := fmt.Sprintf("%s:%s", ip.String(), protocolToString(protocol))
-	log.Println("pcapSession.listenIP: service key is", connKey)
+	if Debug {
+		log.Println("pcapSession.listenIP: service key is", connKey)
+	}
 
 	_, exists := ps.rawIPConnMap.Load(connKey)
 	if exists {
@@ -186,13 +190,17 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 	// Extract the IPv4 layer
 	ipLayer := (*packet).Layer(layers.LayerTypeIPv4)
 	if ipLayer == nil {
-		log.Println("Not an IPv4 packet")
+		if Debug {
+			log.Println("Not an IPv4 packet")
+		}
 		return
 	}
 
 	ipv4, ok := ipLayer.(*layers.IPv4)
 	if !ok {
-		log.Println("Failed to parse IPv4 layer")
+		if Debug {
+			log.Println("Failed to parse IPv4 layer")
+		}
 		return
 	}
 
@@ -200,19 +208,25 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 	protocol := ipv4.Protocol
 
 	// Debugging: Print all client connections in rawIPConnMap
-	fmt.Println("Debug: Listing all client connections in ps.rawIPConnMap:")
-	ps.rawIPConnMap.Range(func(key, value interface{}) bool {
-		fmt.Printf("Client connection key: %s\n", key)
-		return true // continue iterating
-	})
+	if Debug {
+		fmt.Println("Debug: Listing all client connections in ps.rawIPConnMap:")
+		ps.rawIPConnMap.Range(func(key, value interface{}) bool {
+			fmt.Printf("Client connection key: %s\n", key)
+			return true // continue iterating
+		})
+	}
 
 	// Construct the client connection key for RawIPConn lookup
 	key := ipv4.DstIP.String() + ":" + ipv4.SrcIP.String() + ":" + protocol.String()
-	log.Println("Client key is", key)
+	if Debug {
+		log.Println("Client key is", key)
+	}
 	value, exists := ps.rawIPConnMap.Load(key)
 	if exists {
 		conn := value.(*RawIPConn)
-		fmt.Printf("pcapSession->processIncomingPacket: Forwarding packet to client inputChan of %s\n", key)
+		if Debug {
+			fmt.Printf("pcapSession->processIncomingPacket: Forwarding packet to client inputChan of %s\n", key)
+		}
 		// Forward the packet to the RawIPConn's input channel
 		conn.inputChan <- packet
 		return
@@ -220,11 +234,15 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 
 	// Construct the server connection key for RawIPConn lookup
 	key = ipv4.DstIP.String() + ":" + protocol.String()
-	log.Println("Server key is", key)
+	if Debug {
+		log.Println("Server key is", key)
+	}
 	value, exists = ps.rawIPConnMap.Load(key)
 	if exists {
 		conn := value.(*RawIPConn)
-		fmt.Printf("pcapSession->processIncomingPacket: Forwarding packet to server inputChan of %s\n", key)
+		if Debug {
+			fmt.Printf("pcapSession->processIncomingPacket: Forwarding packet to server inputChan of %s\n", key)
+		}
 		// Forward the packet to the RawIPConn's input channel
 		conn.inputChan <- packet
 		return
@@ -243,8 +261,9 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 		key = ipv4.SrcIP.String() + ":" + protocol.String()
 		ps.sendSynPacket(packet, key, tcp)
 	}
-
-	log.Println("No RawIPConn found for key:", key)
+	if Debug {
+		log.Println("No RawIPConn found for key:", key)
+	}
 }
 
 func (ps *pcapSession) sendSynPacket(packet *gopacket.Packet, key string, tcp *layers.TCP) {
@@ -252,7 +271,9 @@ func (ps *pcapSession) sendSynPacket(packet *gopacket.Packet, key string, tcp *l
 	if exists {
 		// Check for SYN/SYN-ACK packet
 		if tcp.SYN || (tcp.ACK && len(tcp.Payload) == 0) {
-			log.Println("Detected locally originated SYN or zero-length ACK packet")
+			if Debug {
+				log.Println("Detected locally originated SYN or zero-length ACK packet")
+			}
 			conn := value.(*RawIPConn)
 			// Forward the packet to the RawIPConn's input channel. Note that it's RawIPConn's resposiblity to tell which ACK belongs to 3-way handshake
 			conn.inputChan <- packet

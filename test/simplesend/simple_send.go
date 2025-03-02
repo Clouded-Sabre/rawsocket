@@ -36,7 +36,7 @@ func main() {
 
 	dstIP := net.ParseIP(destIP)
 	srcIP := net.ParseIP(sourceIP)
-	core := rawsocket.NewRawSocketCore(arpCacheTimeout, arpRequestTimeout)
+	core := rawsocket.NewRawSocketCore(arpCacheTimeout, arpRequestTimeout, true)
 	defer core.Close()
 	log.Println("Raw Socket Core started.")
 
