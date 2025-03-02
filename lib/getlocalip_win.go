@@ -54,7 +54,9 @@ func GetLocalIP(dstIP net.IP) (net.IP, *net.Interface, net.IP, error) {
 			if route.Interface != nil {
 				ifName = route.Interface.Name
 			}
-			fmt.Printf("%d: %s %s\n", i, route.Destination.String(), ifName)
+			if Debug {
+				fmt.Printf("%d: %s %s\n", i, route.Destination.String(), ifName)
+			}
 			_, routeNet, _ := net.ParseCIDR(route.Destination.String())
 			dstMaskSize, _ := routeNet.Mask.Size()
 			if dstMaskSize > bestMatchLength {

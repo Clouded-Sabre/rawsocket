@@ -115,7 +115,7 @@ func main() {
 	}
 
 	// Create the RawSocketCore
-	core := rawsocket.NewRawSocketCore(config.ARPCacheTimeout, config.ARPRequestTimeout, true)
+	core := rawsocket.NewRawSocketCore(config.ARPCacheTimeout, config.ARPRequestTimeout, false)
 
 	startClient(core, config)
 }

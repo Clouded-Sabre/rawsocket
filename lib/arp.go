@@ -126,7 +126,9 @@ func writeARP(handle *pcap.Handle, iface *net.Interface, targetIP net.IP) error 
 		return err
 	}
 
-	log.Println("ARP request sent successfully")
+	if Debug {
+		log.Println("ARP request sent successfully")
+	}
 	return handle.WritePacketData(buf.Bytes())
 }
 
