@@ -25,7 +25,7 @@ Rawsocket provides a consistent raw IP packet interface across Windows, macOS, a
 
 ### Windows
 - **Npcap**: Install [Npcap](https://nmap.org/npcap/) (ensure it is in "WinPcap API-compatible Mode").
-- **WinDivert**: When compiling the sample client (`client.go`), download `windivert64.sys` and `windivert.dll` and place them in the same directory as the executable.
+- **WinDivert**: When compiling the sample client (`client.go`), download `windivert64.sys` and `windivert.dll` and place them in the same directory as the executable. Please note that Rawsocket lib itself does not depend on WinDivert, but in real implementation, you may need it to make your own client application work if you don't want to see a lot of RST packets sending out from client machine.
 - **Administrator Privileges**: Must run as Administrator.
 
 ### macOS
@@ -33,7 +33,7 @@ Rawsocket provides a consistent raw IP packet interface across Windows, macOS, a
 - **Administrator Privileges**: Elevated privileges may be required.
 
 ### Linux
-- Native raw socket support is available. Rawsocket offers a consistent interface across all platforms.
+- Native raw socket support is available via go standard net lib. Rawsocket just try to extend it to offers a consistent interface on Windows and macos platforms.
 
 ---
 
@@ -62,7 +62,7 @@ The repository includes two sample programs:
    ```bash
    go build -o server_win.exe server_win.go
    ```
-3. Run `server_win.exe` in a Command Prompt with Administrator privileges.
+3. Run `server.exe` in a Command Prompt with Administrator privileges.
 
 **Note:**  
 For TCP, the sample server creates a dummy TCP socket that binds to port `54321` (without accepting connections) so that the kernel knows the port is in use and does not send RST packets when raw TCP packets are exchanged.
@@ -105,33 +105,12 @@ The interface supports functions such as `DialIP`, `Read`, `ReadFrom`, `Write`, 
 ## Workarounds & Known Issues
 
 ### TCP 3-Way Handshake Emulation
-On Windows and macOS, the system’s TCP stack may send RST packets when it receives raw SYN packets on an unbound port.  
-**Workaround:**  
-For TCP, create a dummy TCP server socket that binds to the desired port (e.g., `54321`) without accepting connections. This tells the kernel that the port is in use, preventing RST packets.
+When running rawsocket client or server app on Windows and macOS, the system’s TCP stack may send RST packets when it receives raw TCP packets on an unbound port.  
+**Workaround:**
+- for server app, create a dummy tcp server using stardard net.lib which listens at the port but do not accept any connection. This tells the kernel that the port is in use, preventing RST packets.
+- for client app, use Windvert (windows) or pf filtering rules(macos) to block outgoing RST packet.
+Please see sample code for details.
 
-### RST Packet Filtering (Optional)
-On Linux (and via appropriate firewall rules on macOS), you may need to filter out RST packets to avoid interference with raw packet processing.
-- **Linux Example (iptables):**
-  ```bash
-  sudo iptables -A OUTPUT -p tcp --tcp-flags RST RST -s <source-ip> --sport 54321 -j DROP
-  ```
-- **macOS Example (pf):**
-  You can dynamically inject pf rules to block outgoing RST packets from a given source IP and port.
-
----
-
-## Cross-Platform Filtering (Optional)
-
-You can build cross-platform helper functions such as:
-
-```go
-func applyRSTBlockFilter(ip net.IP, port int, isServer bool) error { /* ... */ }
-func removeRSTBlockFilter(ip net.IP, port int, isServer bool) error { /* ... */ }
-```
-
-These functions wrap platform-specific filtering commands (iptables on Linux, pf on macOS) so that your code remains clean and consistent.
-
----
 
 ## Building and Running
 
@@ -139,7 +118,7 @@ Ensure you run with proper privileges:
 - **Windows:** Run executables as Administrator.
 - **macOS:** Use elevated privileges if necessary.
 
-For Windows, ensure the following files are present in the executable’s directory:
+For building client in Windows, ensure the following files are present in the executable’s directory:
 - `windivert64.sys`
 - `windivert.dll`
 
