@@ -54,10 +54,6 @@ func NewRawIPConn(params *RawIPConnParams, config *RawIPConnConfig) (*RawIPConn,
 	return conn, nil
 }
 
-func (conn *RawIPConn) GetProtocol() layers.IPProtocol {
-	return conn.config.protocol
-}
-
 // Read reads data from the RawIPConn.
 func (conn *RawIPConn) Read(buffer []byte) (int, error) {
 	conn.mu.Lock()
@@ -277,6 +273,10 @@ func (conn *RawIPConn) LocalIP() net.IP {
 
 func (conn *RawIPConn) RemoteIP() net.IP {
 	return conn.config.remoteIP
+}
+
+func (conn *RawIPConn) GetProtocol() layers.IPProtocol {
+	return conn.config.protocol
 }
 
 type TimeoutError struct {
