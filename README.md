@@ -104,7 +104,7 @@ The interface supports functions such as `DialIP`, `Read`, `ReadFrom`, `Write`, 
 
 ## Workarounds & Known Issues
 
-### TCP 3-Way Handshake Emulation
+### TCP RST packets blocking
 When running rawsocket client or server app on Windows and macOS, the system’s TCP stack may send RST packets when it receives raw TCP packets on an unbound port.  
 **Workaround:**
 - for server app, create a dummy tcp server using stardard net.lib which listens at the port but do not accept any connection. This tells the kernel that the port is in use, preventing RST packets.
