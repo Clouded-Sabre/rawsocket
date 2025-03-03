@@ -111,6 +111,8 @@ When running rawsocket client or server app on Windows and macOS, the system’s
 - for client app, use Windvert (windows) or pf filtering rules(macos) to block outgoing RST packet.
 Please see sample code for details.
 
+Please note that Rawsocket lib itself does not handle RST blocking becuase it works at IP layer. You will need to handle it in your own client or server application.
+
 
 ## Building and Running
 
