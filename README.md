@@ -120,7 +120,7 @@ Ensure you run with proper privileges:
 - **Windows:** Run executables as Administrator.
 - **macOS:** Use elevated privileges if necessary.
 
-For building client in Windows, ensure the following files are present in the executable’s directory:
+For building the sample client in Windows, ensure the following files are present in the executable’s directory:
 - `windivert64.sys`
 - `windivert.dll`
 
