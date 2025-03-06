@@ -1,7 +1,3 @@
-//go:buildwindows
-//go:build windows
-// +build windows
-
 package main
 
 import (
@@ -18,7 +14,6 @@ import (
 	rawsocket "github.com/Clouded-Sabre/rawsocket/lib"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
-	"golang.org/x/sys/windows"
 )
 
 const (
@@ -95,11 +90,23 @@ func main() {
 		return
 	}
 
+	rsconfig := &rawsocket.RsConfig{
+		ArpRequestTimeout: config.ARPRequestTimeout,
+		ArpCacheTimeout:   config.ARPCacheTimeout,
+	}
 	// Create the RawSocketCore
-	core := rawsocket.NewRawSocketCore(config.ARPCacheTimeout, config.ARPRequestTimeout, false)
+	core, err := rawsocket.NewRSCore(rsconfig)
+	if err != nil {
+		log.Fatalf("Failed to create RawSocketCore: %v", err)
+	}
 
 	// Listen for incoming connections
-	listener, err := core.ListenIP(config.IP, config.Protocol)
+	networkString, err := protocolToListenNetwork(config.IP, config.Protocol)
+	if err != nil {
+		log.Fatal("Network protocol string is malformed")
+	}
+
+	listener, err := core.ListenIP(networkString, &net.IPAddr{IP: config.IP})
 	if err != nil {
 		log.Fatalf("Failed to listen on IP %s: %v", config.IP, err)
 	}
@@ -125,10 +132,10 @@ func main() {
 	outputChan := make(chan *packetVector)
 
 	wg.Add(1)
-	go receivePackets(listener, outputChan, stopChan, &wg)
+	go receivePackets(&listener, config, outputChan, stopChan, &wg)
 
 	wg.Add(1)
-	go handleOutgoingPackets(listener, outputChan, config, stopChan, &wg)
+	go handleOutgoingPackets(&listener, outputChan, config, stopChan, &wg)
 
 	wg.Wait()
 }
@@ -154,7 +161,7 @@ func setupTcpServer(ip string, port int) (*net.TCPListener, error) {
 	return tcpListener, nil
 }
 
-func sendPacket(conn *rawsocket.RawIPConn, dstIP net.IP, n int, message []byte, config *Config) {
+func sendPacket(conn *rawsocket.RawConnection, dstIP net.IP, n int, message []byte, config *Config) {
 	switch config.Protocol {
 	case layers.IPProtocolUDP:
 		sendUDPPacket(conn, dstIP, message)
@@ -167,7 +174,7 @@ func sendPacket(conn *rawsocket.RawIPConn, dstIP net.IP, n int, message []byte, 
 	}
 }
 
-func sendUDPPacket(conn *rawsocket.RawIPConn, dstIP net.IP, message []byte) {
+func sendUDPPacket(conn *rawsocket.RawConnection, dstIP net.IP, message []byte) {
 	// Create the UDP layer
 	udpLayer := &layers.UDP{
 		SrcPort: srcPort,
@@ -175,9 +182,21 @@ func sendUDPPacket(conn *rawsocket.RawIPConn, dstIP net.IP, message []byte) {
 		Length:  8 + uint16(len(message)), // UDP header length + payload length
 	}
 
+	var srcIP net.IP
+	switch v := (*conn).LocalAddr().(type) {
+	case *net.IPAddr:
+		srcIP = v.IP
+	case *net.UDPAddr:
+		srcIP = v.IP
+	case *net.TCPAddr:
+		srcIP = v.IP
+	default:
+		fmt.Println("unknown address type")
+	}
+
 	// Set the network layer for checksum calculation
 	udpLayer.SetNetworkLayerForChecksum(&layers.IPv4{
-		SrcIP: conn.LocalIP(),
+		SrcIP: srcIP,
 		DstIP: dstIP,
 	})
 
@@ -190,13 +209,13 @@ func sendUDPPacket(conn *rawsocket.RawIPConn, dstIP net.IP, message []byte) {
 	}
 
 	// Send the serialized L4 packet
-	_, err = conn.WriteTo(buffer.Bytes(), &net.IPAddr{IP: dstIP})
+	_, err = (*conn).WriteTo(buffer.Bytes(), &net.IPAddr{IP: dstIP})
 	if err != nil {
 		log.Fatalf("Failed to send UDP packet: %v", err)
 	}
 }
 
-func sendTCPPacket(conn *rawsocket.RawIPConn, dstIP net.IP, seq int, message []byte) {
+func sendTCPPacket(conn *rawsocket.RawConnection, dstIP net.IP, seq int, message []byte) {
 	tcpLayer := &layers.TCP{
 		SrcPort: srcPort,
 		DstPort: dstPort,
@@ -207,10 +226,22 @@ func sendTCPPacket(conn *rawsocket.RawIPConn, dstIP net.IP, seq int, message []b
 		PSH: true,
 	}
 
+	var srcIP net.IP
+	switch v := (*conn).LocalAddr().(type) {
+	case *net.IPAddr:
+		srcIP = v.IP
+	case *net.UDPAddr:
+		srcIP = v.IP
+	case *net.TCPAddr:
+		srcIP = v.IP
+	default:
+		fmt.Println("unknown address type")
+	}
+
 	// Set the network layer for checksum calculation.
 	// Use the local IP from the connection and the destination IP.
 	tcpLayer.SetNetworkLayerForChecksum(&layers.IPv4{
-		SrcIP: conn.LocalIP(),
+		SrcIP: srcIP,
 		DstIP: dstIP,
 	})
 
@@ -221,13 +252,13 @@ func sendTCPPacket(conn *rawsocket.RawIPConn, dstIP net.IP, seq int, message []b
 		log.Fatalf("Failed to serialize TCP packet: %v", err)
 	}
 
-	_, err = conn.WriteTo(buffer.Bytes(), &net.IPAddr{IP: dstIP})
+	_, err = (*conn).WriteTo(buffer.Bytes(), &net.IPAddr{IP: dstIP})
 	if err != nil {
 		log.Fatalf("Failed to send TCP packet: %v", err)
 	}
 }
 
-func sendICMPPacket(conn *rawsocket.RawIPConn, dstIP net.IP, message []byte) {
+func sendICMPPacket(conn *rawsocket.RawConnection, dstIP net.IP, message []byte) {
 	icmpLayer := &layers.ICMPv4{
 		TypeCode: layers.CreateICMPv4TypeCode(8, 0), // Echo request
 	}
@@ -239,7 +270,7 @@ func sendICMPPacket(conn *rawsocket.RawIPConn, dstIP net.IP, message []byte) {
 		log.Fatalf("Failed to serialize ICMP packet: %v", err)
 	}
 
-	_, err = conn.WriteTo(buffer.Bytes(), &net.IPAddr{IP: dstIP})
+	_, err = (*conn).WriteTo(buffer.Bytes(), &net.IPAddr{IP: dstIP})
 	if err != nil {
 		log.Fatalf("Failed to send ICMP packet: %v", err)
 	}
@@ -259,7 +290,7 @@ func newClient(IP net.IP) (*client, error) {
 	return newclient, nil
 }
 
-func receivePackets(conn *rawsocket.RawIPConn, outputChan chan *packetVector, stopChan chan struct{}, wg *sync.WaitGroup) {
+func receivePackets(conn *rawsocket.RawConnection, config *Config, outputChan chan *packetVector, stopChan chan struct{}, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	buffer := make([]byte, 1024)
@@ -269,8 +300,8 @@ func receivePackets(conn *rawsocket.RawIPConn, outputChan chan *packetVector, st
 			log.Println("receivePackets got stop signal. Exitting...")
 			return
 		default:
-			conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // read wait for 500 ms
-			n, addr, err := conn.ReadFrom(buffer)
+			(*conn).SetReadDeadline(time.Now().Add(500 * time.Millisecond)) // read wait for 500 ms
+			n, addr, err := (*conn).ReadFrom(buffer)
 			if err != nil {
 				// Check if the error is a timeout
 				if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
@@ -292,7 +323,7 @@ func receivePackets(conn *rawsocket.RawIPConn, outputChan chan *packetVector, st
 				cl, _ = newClient(net.ParseIP(srcIP))
 				clientMap[srcIP] = cl
 				wg.Add(1)
-				go handleIncomingPackets(cl, conn, outputChan, stopChan, wg)
+				go handleIncomingPackets(cl, config, outputChan, stopChan, wg)
 			}
 			mu.Unlock()
 
@@ -308,7 +339,7 @@ type packetVector struct {
 	client          *client
 }
 
-func handleIncomingPackets(client *client, conn *rawsocket.RawIPConn, outputChan chan *packetVector, stopChan chan struct{}, wg *sync.WaitGroup) {
+func handleIncomingPackets(client *client, config *Config, outputChan chan *packetVector, stopChan chan struct{}, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for {
@@ -318,7 +349,7 @@ func handleIncomingPackets(client *client, conn *rawsocket.RawIPConn, outputChan
 			return
 		case l4packetByteSlice := <-client.inputChan:
 			// Extract the L4 payload
-			payload := getL4Payload(l4packetByteSlice, conn.GetProtocol())
+			payload := getL4Payload(l4packetByteSlice, config.Protocol)
 			if payload != nil {
 				fmt.Printf("Received packet from %s: %s\n", client.IP.String(), string(payload))
 			} else {
@@ -338,7 +369,7 @@ func handleIncomingPackets(client *client, conn *rawsocket.RawIPConn, outputChan
 	}
 }
 
-func handleOutgoingPackets(conn *rawsocket.RawIPConn, outputChan chan *packetVector, config *Config, stopChan chan struct{}, wg *sync.WaitGroup) {
+func handleOutgoingPackets(conn *rawsocket.RawConnection, outputChan chan *packetVector, config *Config, stopChan chan struct{}, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	for {
@@ -386,12 +417,24 @@ func getL4Payload(packetData []byte, protocol layers.IPProtocol) []byte {
 	return nil
 }
 
-func isAdmin() bool {
-	// Load shell32.dll and get IsUserAnAdmin function
-	shell32 := windows.NewLazySystemDLL("shell32.dll")
-	isUserAnAdmin := shell32.NewProc("IsUserAnAdmin")
+func protocolToListenNetwork(ip net.IP, protocol layers.IPProtocol) (string, error) {
+	isIPv6 := ip.To4() == nil
 
-	// Call function, non-zero return value means admin privileges
-	ret, _, _ := isUserAnAdmin.Call()
-	return ret != 0
+	protocolMap := map[layers.IPProtocol]string{
+		layers.IPProtocolICMPv4: "icmp",
+		layers.IPProtocolICMPv6: "icmp",
+		layers.IPProtocolTCP:    "tcp",
+		layers.IPProtocolUDP:    "udp",
+	}
+
+	protoName, found := protocolMap[protocol]
+	if !found {
+		return "", fmt.Errorf("unsupported protocol: %d", protocol)
+	}
+
+	if isIPv6 {
+		return "ip6:" + protoName, nil
+	} else {
+		return "ip4:" + protoName, nil
+	}
 }
