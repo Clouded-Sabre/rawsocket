@@ -118,7 +118,7 @@ func (n *RSCoreImpl) ListenIP(network string, laddr *net.IPAddr) (RawConnection,
 // NewGlobalCore initializes and returns a RawSocketCore for non-linux platforms.
 func NewGlobalCore(arpCacheTimeout, arpRequestTimeout int) *RawSocketCore {
 	globalCoreOnce.Do(func() {
-		globalCore = NewRawSocketCore(arpCacheTimeout, arpRequestTimeout, true)
+		globalCore = NewRawSocketCore(arpCacheTimeout, arpRequestTimeout, false)
 	})
 	return globalCore
 }
