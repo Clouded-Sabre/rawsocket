@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+
 	"time"
 
 	rawsocket "github.com/Clouded-Sabre/rawsocket/lib"

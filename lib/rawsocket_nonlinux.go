@@ -125,5 +125,5 @@ func NewGlobalCore(arpCacheTimeout, arpRequestTimeout int) *RawSocketCore {
 
 // NewRSCore returns an RSCore instance. On Linux, it uses a dummy implementation; on other platforms, it initializes RawSocketCore.
 func NewRSCore(config *RsConfig) (RSCore, error) {
-	return RSCore(&RSCoreImpl{core: NewGlobalCore(config.ArpCacheTimeout, config.ArpRequestTimeout)}), nil
+	return &RSCoreImpl{core: NewGlobalCore(config.ArpCacheTimeout, config.ArpRequestTimeout)}, nil
 }

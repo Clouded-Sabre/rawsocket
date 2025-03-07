@@ -115,13 +115,23 @@ func main() {
 	}
 
 	// Create the RawSocketCore
-	core := rawsocket.NewRawSocketCore(config.ARPCacheTimeout, config.ARPRequestTimeout, false)
+	core, err := rawsocket.NewRSCore(&rawsocket.RsConfig{ArpRequestTimeout: config.ARPRequestTimeout,
+		ArpCacheTimeout: config.ARPCacheTimeout})
+	if err != nil {
+		log.Fatalf("Failed to create RawSocketCore: %v", err)
+	}
 
 	startClient(core, config)
 }
 
-func startClient(core *rawsocket.RawSocketCore, config *Config) {
-	conn, err := core.DialIP(config.Protocol, config.sourceIP, config.serverIP)
+func startClient(core rawsocket.RSCore, config *Config) {
+	// Listen for incoming connections
+	networkString, err := protocolToListenNetwork(config.serverIP, config.Protocol)
+	if err != nil {
+		log.Fatal("Network protocol string is malformed")
+	}
+
+	conn, err := core.DialIP(networkString, &net.IPAddr{IP: config.sourceIP}, &net.IPAddr{IP: config.serverIP})
 	if err != nil {
 		log.Fatalf("Failed to dial to server IP %s: %v", config.serverIP, err)
 	}
@@ -144,7 +154,7 @@ func startClient(core *rawsocket.RawSocketCore, config *Config) {
 	)
 	// Start handling incoming responses first to avoid missing responses
 	wg.Add(1)
-	go receiveResponses(conn, stopChan, &wg)
+	go receiveResponses(conn, config, stopChan, &wg)
 
 	// Start sending packets with sequence IDs
 	wg.Add(1)
@@ -163,7 +173,7 @@ func startClient(core *rawsocket.RawSocketCore, config *Config) {
 	wg.Wait()
 }
 
-func sendPackets(n int, interval int, conn *rawsocket.RawIPConn, config *Config, wg *sync.WaitGroup) {
+func sendPackets(n int, interval int, conn rawsocket.RawConnection, config *Config, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	intervalDuration := time.Duration(interval) * time.Millisecond
@@ -188,7 +198,7 @@ func sendPackets(n int, interval int, conn *rawsocket.RawIPConn, config *Config,
 	}
 }
 
-func sendUDPPacket(conn *rawsocket.RawIPConn, config *Config, message string) {
+func sendUDPPacket(conn rawsocket.RawConnection, config *Config, message string) {
 	srcIP, _, _, _ := rawsocket.GetLocalIP(config.serverIP)
 	udpLayer := &layers.UDP{
 		SrcPort: 12345,
@@ -213,7 +223,7 @@ func sendUDPPacket(conn *rawsocket.RawIPConn, config *Config, message string) {
 	}
 }
 
-func sendTCPPacket(conn *rawsocket.RawIPConn, seq int, config *Config, message string) {
+func sendTCPPacket(conn rawsocket.RawConnection, seq int, config *Config, message string) {
 	srcIP, _, _, _ := rawsocket.GetLocalIP(config.serverIP)
 	tcpLayer := &layers.TCP{
 		SrcPort: 12345,
@@ -243,7 +253,7 @@ func sendTCPPacket(conn *rawsocket.RawIPConn, seq int, config *Config, message s
 	}
 }
 
-func sendICMPPacket(conn *rawsocket.RawIPConn, message string) {
+func sendICMPPacket(conn rawsocket.RawConnection, message string) {
 	icmpLayer := &layers.ICMPv4{
 		TypeCode: layers.CreateICMPv4TypeCode(8, 0), // Echo request
 	}
@@ -261,7 +271,7 @@ func sendICMPPacket(conn *rawsocket.RawIPConn, message string) {
 	}
 }
 
-func receiveResponses(conn *rawsocket.RawIPConn, stopChan chan struct{}, wg *sync.WaitGroup) {
+func receiveResponses(conn rawsocket.RawConnection, config *Config, stopChan chan struct{}, wg *sync.WaitGroup) {
 	defer wg.Done()
 
 	buffer := make([]byte, 1024)
@@ -290,7 +300,7 @@ func receiveResponses(conn *rawsocket.RawIPConn, stopChan chan struct{}, wg *syn
 			fmt.Println(Red+"We heard some IP packet of total length", n, "from", srcAddr.String(), Reset)
 
 			// Pass the buffer directly to getL4Payload for decoding
-			if payload := getL4Payload(buffer[:n], conn.GetProtocol()); payload != nil {
+			if payload := getL4Payload(buffer[:n], config.Protocol); payload != nil {
 				fmt.Printf(Blue+"Received response: %s\n"+Reset, string(payload))
 			} else {
 				fmt.Println("No L4 payload found")
@@ -410,3 +420,25 @@ func getL4Payload(packetBytes []byte]) []byte {
 	return nil
 }
 */
+
+func protocolToListenNetwork(ip net.IP, protocol layers.IPProtocol) (string, error) {
+	isIPv6 := ip.To4() == nil
+
+	protocolMap := map[layers.IPProtocol]string{
+		layers.IPProtocolICMPv4: "icmp",
+		layers.IPProtocolICMPv6: "icmp",
+		layers.IPProtocolTCP:    "tcp",
+		layers.IPProtocolUDP:    "udp",
+	}
+
+	protoName, found := protocolMap[protocol]
+	if !found {
+		return "", fmt.Errorf("unsupported protocol: %d", protocol)
+	}
+
+	if isIPv6 {
+		return "ip6:" + protoName, nil
+	} else {
+		return "ip4:" + protoName, nil
+	}
+}
