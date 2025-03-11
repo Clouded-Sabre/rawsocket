@@ -3,7 +3,9 @@
 package lib
 
 import (
+	"fmt"
 	"net"
+	"os"
 	"time"
 )
 
@@ -70,5 +72,10 @@ func (l *RSCoreImpl) ListenIP(network string, laddr *net.IPAddr) (RawConnection,
 
 // NewRSCore returns an RSCore instance. On Linux, it uses a dummy implementation; on other platforms, it initializes RawSocketCore.
 func NewRSCore(config *RsConfig) (RSCore, error) {
+	// Check if running as root or admin
+	if !isAdmin() {
+		fmt.Println("Rawsocket must be run as admin privilege on Windows or root privilege on Linux and macos.")
+		os.Exit(1)
+	}
 	return &RSCoreImpl{}, nil
 }
