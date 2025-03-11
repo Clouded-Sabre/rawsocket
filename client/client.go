@@ -9,7 +9,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -106,12 +105,6 @@ func main() {
 	config := parseArgs()
 	if config == nil {
 		return
-	}
-
-	// Check if running as root
-	if !isAdmin() {
-		fmt.Println("This program must be run as root, please use sudo.")
-		os.Exit(1)
 	}
 
 	// Create the RawSocketCore
