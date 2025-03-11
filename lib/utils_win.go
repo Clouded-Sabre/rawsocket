@@ -1,7 +1,7 @@
 //go:build windows
 // +build windows
 
-package main
+package lib
 
 import "golang.org/x/sys/windows"
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"sync"
 	"time"
 
@@ -28,6 +29,11 @@ type RawSocketCore struct {
 var Debug = false
 
 func NewRawSocketCore(arpCacheTimeout, arpRequestTimeout int, debug bool) *RawSocketCore {
+	// Check if running as root or admin
+	if !isAdmin() {
+		fmt.Println("Rawsocket must be run as admin privilege on Windows or root privilege on Linux and macos.")
+		os.Exit(1)
+	}
 	core := &RawSocketCore{
 		pcapSessionMap:      make(map[string]*pcapSession),
 		arpCacheTimeout:     time.Duration(arpCacheTimeout) * time.Second,
