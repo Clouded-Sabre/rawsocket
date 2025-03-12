@@ -117,9 +117,9 @@ func (n *RSCoreImpl) ListenIP(network string, laddr *net.IPAddr) (RawConnection,
 }
 
 // NewGlobalCore initializes and returns a RawSocketCore for non-linux platforms.
-func NewGlobalCore(arpCacheTimeout, arpRequestTimeout int) *RawSocketCore {
+func NewGlobalCore(arpCacheTimeout, arpRequestTimeout int, debug bool) *RawSocketCore {
 	globalCoreOnce.Do(func() {
-		globalCore = NewRawSocketCore(arpCacheTimeout, arpRequestTimeout, false)
+		globalCore = NewRawSocketCore(arpCacheTimeout, arpRequestTimeout, debug)
 	})
 	return globalCore
 }
@@ -131,5 +131,5 @@ func NewRSCore(config *RsConfig) (RSCore, error) {
 		fmt.Println("Rawsocket must be run as admin privilege on Windows or root privilege on Linux and macos.")
 		os.Exit(1)
 	}
-	return &RSCoreImpl{core: NewGlobalCore(config.ArpCacheTimeout, config.ArpRequestTimeout)}, nil
+	return &RSCoreImpl{core: NewGlobalCore(config.ArpCacheTimeout, config.ArpRequestTimeout, config.Debug)}, nil
 }
