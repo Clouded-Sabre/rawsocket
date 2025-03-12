@@ -32,4 +32,5 @@ type RSCore interface {
 
 type RsConfig struct {
 	ArpCacheTimeout, ArpRequestTimeout int
+	Debug                              bool
 }
