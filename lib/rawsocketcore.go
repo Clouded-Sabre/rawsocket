@@ -42,12 +42,6 @@ func NewRawSocketCore(arpCacheTimeout, arpRequestTimeout int, debug bool) *RawSo
 		stopChan:            make(chan struct{}),
 		wg:                  sync.WaitGroup{},
 	}
-	if core.arpCacheTimeout <= 0 {
-		core.arpCacheTimeout = arpCacheTimeoutDefault
-	}
-	if core.arpRequestTimeout <= 0 {
-		core.arpRequestTimeout = arpRequestTimeoutDefault
-	}
 
 	Debug = debug
 
