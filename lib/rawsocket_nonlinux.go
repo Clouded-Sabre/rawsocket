@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -70,15 +71,19 @@ func (n *RSCoreImpl) DialIP(network string, laddr *net.IPAddr, raddr *net.IPAddr
 	}
 
 	var protocol layers.IPProtocol
-	switch strings.ToLower(parts[1]) {
-	case "tcp":
-		protocol = layers.IPProtocolTCP
-	case "udp":
-		protocol = layers.IPProtocolUDP
-	case "icmp":
-		protocol = layers.IPProtocolICMPv4
-	default:
-		return nil, fmt.Errorf("unsupported protocol: %s", parts[1])
+	if protoID, err := strconv.Atoi(parts[1]); err == nil {
+		protocol = layers.IPProtocol(protoID) // Handle numeric protocol ID
+	} else {
+		switch strings.ToLower(parts[1]) {
+		case "tcp":
+			protocol = layers.IPProtocolTCP
+		case "udp":
+			protocol = layers.IPProtocolUDP
+		case "icmp":
+			protocol = layers.IPProtocolICMPv4
+		default:
+			return nil, fmt.Errorf("unsupported protocol: %s", parts[1])
+		}
 	}
 
 	rawConn, err := n.core.DialIP(protocol, laddr.IP, raddr.IP)
@@ -98,15 +103,19 @@ func (n *RSCoreImpl) ListenIP(network string, laddr *net.IPAddr) (RawConnection,
 	}
 
 	var protocol layers.IPProtocol
-	switch strings.ToLower(parts[1]) {
-	case "tcp":
-		protocol = layers.IPProtocolTCP
-	case "udp":
-		protocol = layers.IPProtocolUDP
-	case "icmp":
-		protocol = layers.IPProtocolICMPv4
-	default:
-		return nil, fmt.Errorf("unsupported protocol: %s", parts[1])
+	if protoID, err := strconv.Atoi(parts[1]); err == nil {
+		protocol = layers.IPProtocol(protoID) // Handle numeric protocol ID
+	} else {
+		switch strings.ToLower(parts[1]) {
+		case "tcp":
+			protocol = layers.IPProtocolTCP
+		case "udp":
+			protocol = layers.IPProtocolUDP
+		case "icmp":
+			protocol = layers.IPProtocolICMPv4
+		default:
+			return nil, fmt.Errorf("unsupported protocol: %s", parts[1])
+		}
 	}
 
 	rawConn, err := n.core.ListenIP(laddr.IP, protocol)
