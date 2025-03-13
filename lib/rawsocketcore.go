@@ -27,6 +27,11 @@ type RawSocketCore struct {
 
 var Debug = false
 
+const (
+	arpCacheTimeoutDefault   = 30 // seconds
+	arpRequestTimeoutDefault = 60 // seconds
+)
+
 func NewRawSocketCore(arpCacheTimeout, arpRequestTimeout int, debug bool) *RawSocketCore {
 	core := &RawSocketCore{
 		pcapSessionMap:      make(map[string]*pcapSession),
@@ -36,6 +41,12 @@ func NewRawSocketCore(arpCacheTimeout, arpRequestTimeout int, debug bool) *RawSo
 		arpCache:            NewARPCache(time.Duration(arpCacheTimeout) * time.Second),
 		stopChan:            make(chan struct{}),
 		wg:                  sync.WaitGroup{},
+	}
+	if core.arpCacheTimeout <= 0 {
+		core.arpCacheTimeout = arpCacheTimeoutDefault
+	}
+	if core.arpRequestTimeout <= 0 {
+		core.arpRequestTimeout = arpRequestTimeoutDefault
 	}
 
 	Debug = debug
