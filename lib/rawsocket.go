@@ -28,6 +28,7 @@ type RawConnection interface {
 type RSCore interface {
 	DialIP(network string, laddr *net.IPAddr, raddr *net.IPAddr) (RawConnection, error)
 	ListenIP(network string, laddr *net.IPAddr) (RawConnection, error)
+	Close() error
 }
 
 type RsConfig struct {

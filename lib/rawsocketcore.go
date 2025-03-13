@@ -169,9 +169,9 @@ func (core *RawSocketCore) handlePcapSessionClose() {
 	}
 }
 
-func (core *RawSocketCore) Close() {
+func (core *RawSocketCore) Close() error {
 	if core.isClosed {
-		return
+		return nil
 	}
 	core.isClosed = true
 
@@ -196,4 +196,6 @@ func (core *RawSocketCore) Close() {
 	core.arpCache.Close()
 
 	log.Println("Raw socket core stopped.")
+
+	return nil
 }

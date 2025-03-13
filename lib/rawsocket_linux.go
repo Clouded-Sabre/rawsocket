@@ -70,6 +70,10 @@ func (l *RSCoreImpl) ListenIP(network string, laddr *net.IPAddr) (RawConnection,
 	return &RawConnectionImpl{conn: ipConn}, nil
 }
 
+func (l *RSCoreImpl) Close() error {
+	return nil
+}
+
 // NewRSCore returns an RSCore instance. On Linux, it uses a dummy implementation; on other platforms, it initializes RawSocketCore.
 func NewRSCore(config *RsConfig) (RSCore, error) {
 	// Check if running as root or admin
