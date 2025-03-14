@@ -84,7 +84,7 @@ func NewRSCore(config *RsConfig) (RSCore, error) {
 	return &RSCoreImpl{}, nil
 }
 
-func NewRsConfig() *RsConfig {
+func NewDefaultRsConfig() *RsConfig {
 	return &RsConfig{
 		ArpCacheTimeout:   0,
 		ArpRequestTimeout: 0,
