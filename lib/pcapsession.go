@@ -218,8 +218,9 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 
 	// Construct the client connection key for RawIPConn lookup
 	key := ipv4.DstIP.String() + ":" + ipv4.SrcIP.String() + ":" + protocol.String()
+	log.Println("pcapSession:processIncomingPacket: Client key is", key)
 	if Debug {
-		log.Println("Client key is", key)
+		log.Println("pcapSession:processIncomingPacket: Client key is", key)
 	}
 	value, exists := ps.rawIPConnMap.Load(key)
 	if exists {
