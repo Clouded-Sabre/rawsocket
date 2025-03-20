@@ -124,7 +124,3 @@ func verifyRuleExactMatch(anchor, expectedRule string) error {
 	}
 	return nil
 }
-
-func isAdmin() bool {
-	return os.Getuid() == 0
-}

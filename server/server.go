@@ -6,7 +6,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"os"
 	"strings"
 	"sync"
 
@@ -80,12 +79,6 @@ var clientMap = make(map[string]*client)
 var mu sync.Mutex
 
 func main() {
-	// Check if running as root
-	if !isAdmin() {
-		fmt.Println("This program must be run as admin, please run it in an CMD window with admin privilege.")
-		os.Exit(1)
-	}
-
 	config := parseArgs()
 	if config == nil {
 		return

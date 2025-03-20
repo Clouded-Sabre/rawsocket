@@ -6,6 +6,8 @@ package lib
 import (
 	"fmt"
 	"net"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -69,15 +71,19 @@ func (n *RSCoreImpl) DialIP(network string, laddr *net.IPAddr, raddr *net.IPAddr
 	}
 
 	var protocol layers.IPProtocol
-	switch strings.ToLower(parts[1]) {
-	case "tcp":
-		protocol = layers.IPProtocolTCP
-	case "udp":
-		protocol = layers.IPProtocolUDP
-	case "icmp":
-		protocol = layers.IPProtocolICMPv4
-	default:
-		return nil, fmt.Errorf("unsupported protocol: %s", parts[1])
+	if protoID, err := strconv.Atoi(parts[1]); err == nil {
+		protocol = layers.IPProtocol(protoID) // Handle numeric protocol ID
+	} else {
+		switch strings.ToLower(parts[1]) {
+		case "tcp":
+			protocol = layers.IPProtocolTCP
+		case "udp":
+			protocol = layers.IPProtocolUDP
+		case "icmp":
+			protocol = layers.IPProtocolICMPv4
+		default:
+			return nil, fmt.Errorf("unsupported protocol: %s", parts[1])
+		}
 	}
 
 	rawConn, err := n.core.DialIP(protocol, laddr.IP, raddr.IP)
@@ -97,15 +103,19 @@ func (n *RSCoreImpl) ListenIP(network string, laddr *net.IPAddr) (RawConnection,
 	}
 
 	var protocol layers.IPProtocol
-	switch strings.ToLower(parts[1]) {
-	case "tcp":
-		protocol = layers.IPProtocolTCP
-	case "udp":
-		protocol = layers.IPProtocolUDP
-	case "icmp":
-		protocol = layers.IPProtocolICMPv4
-	default:
-		return nil, fmt.Errorf("unsupported protocol: %s", parts[1])
+	if protoID, err := strconv.Atoi(parts[1]); err == nil {
+		protocol = layers.IPProtocol(protoID) // Handle numeric protocol ID
+	} else {
+		switch strings.ToLower(parts[1]) {
+		case "tcp":
+			protocol = layers.IPProtocolTCP
+		case "udp":
+			protocol = layers.IPProtocolUDP
+		case "icmp":
+			protocol = layers.IPProtocolICMPv4
+		default:
+			return nil, fmt.Errorf("unsupported protocol: %s", parts[1])
+		}
 	}
 
 	rawConn, err := n.core.ListenIP(laddr.IP, protocol)
@@ -115,15 +125,32 @@ func (n *RSCoreImpl) ListenIP(network string, laddr *net.IPAddr) (RawConnection,
 	return &rawConnectionNonLinuxImpl{conn: rawConn}, nil
 }
 
+func (n *RSCoreImpl) Close() error {
+	return n.core.Close()
+}
+
 // NewGlobalCore initializes and returns a RawSocketCore for non-linux platforms.
-func NewGlobalCore(arpCacheTimeout, arpRequestTimeout int) *RawSocketCore {
+func NewGlobalCore(arpCacheTimeout, arpRequestTimeout int, debug bool) *RawSocketCore {
 	globalCoreOnce.Do(func() {
-		globalCore = NewRawSocketCore(arpCacheTimeout, arpRequestTimeout, false)
+		globalCore = NewRawSocketCore(arpCacheTimeout, arpRequestTimeout, debug)
 	})
 	return globalCore
 }
 
 // NewRSCore returns an RSCore instance. On Linux, it uses a dummy implementation; on other platforms, it initializes RawSocketCore.
 func NewRSCore(config *RsConfig) (RSCore, error) {
-	return &RSCoreImpl{core: NewGlobalCore(config.ArpCacheTimeout, config.ArpRequestTimeout)}, nil
+	// Check if running as root or admin
+	if !isAdmin() {
+		fmt.Println("Rawsocket must be run as admin privilege on Windows or root privilege on Linux and macos.")
+		os.Exit(1)
+	}
+	return &RSCoreImpl{core: NewGlobalCore(config.ArpCacheTimeout, config.ArpRequestTimeout, config.Debug)}, nil
+}
+
+func NewDefaultRsConfig() *RsConfig {
+	return &RsConfig{
+		ArpCacheTimeout:   arpCacheTimeoutDefault,
+		ArpRequestTimeout: arpRequestTimeoutDefault,
+		Debug:             false,
+	}
 }
