@@ -218,7 +218,6 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 
 	// Construct the client connection key for RawIPConn lookup
 	key := ipv4.DstIP.String() + ":" + ipv4.SrcIP.String() + ":" + protocol.String()
-	log.Println("pcapSession:processIncomingPacket: Client key is", key)
 	if Debug {
 		log.Println("pcapSession:processIncomingPacket: Client key is", key)
 	}
@@ -229,6 +228,7 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 			fmt.Printf("pcapSession->processIncomingPacket: Forwarding packet to client inputChan of %s\n", key)
 		}
 		// Forward the packet to the RawIPConn's input channel
+		log.Println("pcapSession:processIncomingPacket: forwarded packet's client key is", key)
 		conn.inputChan <- packet
 		return
 	}
