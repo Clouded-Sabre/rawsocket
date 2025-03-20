@@ -33,22 +33,22 @@ type RawIPConnConfig struct {
 
 // RawIPConn represents a connection for raw IP packets.
 type RawIPConn struct {
-	params        *RawIPConnParams
-	config        *RawIPConnConfig
-	readDeadline  time.Time
-	inputChan     chan *gopacket.Packet
-	tcpSignalChan chan *gopacket.Packet // to receive TCP signalling packets sniffed by pcapSession. For client side, it's SYN and ACK. For Server, it's SYN-ACK
-	isClosed      bool
-	mu            sync.Mutex
+	params       *RawIPConnParams
+	config       *RawIPConnConfig
+	readDeadline time.Time
+	inputChan    chan *gopacket.Packet
+	//tcpSignalChan chan *gopacket.Packet // to receive TCP signalling packets sniffed by pcapSession. For client side, it's SYN and ACK. For Server, it's SYN-ACK
+	isClosed bool
+	mu       sync.Mutex
 }
 
 func NewRawIPConn(params *RawIPConnParams, config *RawIPConnConfig) (*RawIPConn, error) {
 	conn := &RawIPConn{
-		params:        params,
-		config:        config,
-		inputChan:     make(chan *gopacket.Packet),
-		tcpSignalChan: make(chan *gopacket.Packet),
-		mu:            sync.Mutex{},
+		params:    params,
+		config:    config,
+		inputChan: make(chan *gopacket.Packet),
+		//tcpSignalChan: make(chan *gopacket.Packet),
+		mu: sync.Mutex{},
 	}
 
 	return conn, nil

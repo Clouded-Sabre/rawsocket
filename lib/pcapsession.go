@@ -228,7 +228,6 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 			fmt.Printf("pcapSession->processIncomingPacket: Forwarding packet to client inputChan of %s\n", key)
 		}
 		// Forward the packet to the RawIPConn's input channel
-		log.Println("pcapSession:processIncomingPacket: forwarded packet's client key is", key)
 		conn.inputChan <- packet
 		return
 	}
@@ -249,25 +248,28 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 		return
 	}
 
-	// Check for TCP 3-way handshake packets originated locally
-	tcpLayer := (*packet).Layer(layers.LayerTypeTCP)
-	if tcpLayer != nil {
-		tcp, _ := tcpLayer.(*layers.TCP)
+	/*// Check for TCP 3-way handshake packets originated locally
+	if protocol != layers.IPProtocolTCP {
+		tcpLayer := (*packet).Layer(layers.LayerTypeTCP)
+		if tcpLayer != nil {
+			tcp, _ := tcpLayer.(*layers.TCP)
 
-		// Construct the client connection key (outbound packet) for RawIPConn lookup
-		key = ipv4.SrcIP.String() + ":" + ipv4.DstIP.String() + ":" + protocol.String()
-		ps.sendSynPacket(packet, key, tcp)
+			// Construct the client connection key (outbound packet) for RawIPConn lookup
+			key = ipv4.SrcIP.String() + ":" + ipv4.DstIP.String() + ":" + protocol.String()
+			ps.sendSynPacket(packet, key, tcp)
 
-		// Construct the server connection key for RawIPConn lookup
-		key = ipv4.SrcIP.String() + ":" + protocol.String()
-		ps.sendSynPacket(packet, key, tcp)
-	}
+			// Construct the server connection key for RawIPConn lookup
+			key = ipv4.SrcIP.String() + ":" + protocol.String()
+			ps.sendSynPacket(packet, key, tcp)
+		}
+	}*/
+
 	if Debug {
 		log.Println("No RawIPConn found for key:", key)
 	}
 }
 
-func (ps *pcapSession) sendSynPacket(packet *gopacket.Packet, key string, tcp *layers.TCP) {
+/*func (ps *pcapSession) sendSynPacket(packet *gopacket.Packet, key string, tcp *layers.TCP) {
 	value, exists := ps.rawIPConnMap.Load(key)
 	if exists {
 		// Check for SYN/SYN-ACK packet
@@ -281,7 +283,7 @@ func (ps *pcapSession) sendSynPacket(packet *gopacket.Packet, key string, tcp *l
 			return
 		}
 	}
-}
+}*/
 
 func (ps *pcapSession) handleOutgoingPackets() {
 	defer ps.wg.Done()
