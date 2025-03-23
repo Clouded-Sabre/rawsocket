@@ -147,7 +147,7 @@ func NewRSCore(config *RsConfig) (RSCore, error) {
 	return &RSCoreImpl{core: NewGlobalCore(config.ArpCacheTimeout, config.ArpRequestTimeout, config.Debug)}, nil
 }
 
-func NewDefaultRsConfig() *RsConfig {
+func DefaultRsConfig() *RsConfig {
 	return &RsConfig{
 		ArpCacheTimeout:   arpCacheTimeoutDefault,
 		ArpRequestTimeout: arpRequestTimeoutDefault,
