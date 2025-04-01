@@ -5,3 +5,4 @@ test/netlib/netlib.exe
 test/simplesend/simplesend.exe
 client/client
 server/server
+test/macos_server/server/server.go
