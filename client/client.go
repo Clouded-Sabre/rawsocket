@@ -1,6 +1,13 @@
 //go:build darwin || freebsd || windows
 // +build darwin freebsd windows
 
+// This client is designed to send raw IP packets to a specified server IP address
+// using a specified protocol (TCP, UDP, or ICMP). It allows the user to configure
+// the source IP address, protocol, ARP cache timeout, and ARP request timeout.
+// The client sends a series of packets with sequence IDs and listens for incoming
+// responses, printing the received data to the console. It uses the rawsocket library
+// to create raw sockets and handle ARP resolution.
+
 package main
 
 import (
