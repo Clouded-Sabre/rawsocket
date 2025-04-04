@@ -20,11 +20,13 @@ type pcapSessionConfig struct {
 	arpRequestTimeout time.Duration
 }
 type pcapSessionParams struct {
-	key                 string
-	iface               *net.Interface
-	handle              *pcap.Handle
-	pcapSessionCloseSig chan *pcapSession
-	arpCache            *ARPCache
+	key                       string
+	iface                     *net.Interface
+	handle                    *pcap.Handle
+	loopbackRerouteInputChan  chan *gopacket.Packet // Channel for for sending packets to rawsocketCore for loopback rerouting
+	loopbackRerouteOutputChan chan *gopacket.Packet
+	pcapSessionCloseSig       chan *pcapSession
+	arpCache                  *ARPCache
 }
 
 type pcapSession struct {
@@ -34,6 +36,7 @@ type pcapSession struct {
 	rawIPConnMap       sync.Map
 	outgoingPackets    chan *gopacket.Packet // Channel for outgoing packets
 	rawIPConnCloseChan chan *RawIPConn
+	isLoopback         bool // true if the iface is a loopback interface
 	stopChan           chan struct{}
 	wg                 sync.WaitGroup
 	isClosed           bool
@@ -56,6 +59,8 @@ func newPcapSession(params *pcapSessionParams, config *pcapSessionConfig) (*pcap
 		stopChan:           make(chan struct{}),
 		wg:                 sync.WaitGroup{},
 	}
+
+	session.isLoopback = (params.iface.Flags & net.FlagLoopback) != 0
 
 	session.wg.Add(1)
 	go session.handleIncomingPackets()
@@ -204,6 +209,31 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 		return
 	}
 
+	// Create a complete copy of the IPv4 packet including header and payload
+	buffer := gopacket.NewSerializeBuffer()
+	opts := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
+	err := gopacket.SerializeLayers(buffer, opts,
+		ipv4,
+		gopacket.Payload(ipv4.Payload),
+	)
+	if err != nil {
+		if Debug {
+			log.Println("Failed to serialize IPv4 packet:", err)
+		}
+		return
+	}
+	newIpPacket := gopacket.NewPacket(buffer.Bytes(), layers.LayerTypeIPv4, gopacket.Default)
+
+	// rerouting logic for loopback interface
+	// Some OSes send packets of internal communication via loopback interface even if the destination is a local non-loopback IP
+	if ps.isLoopback && !ipv4.DstIP.IsLoopback() {
+		if Debug {
+			log.Printf("Loopback interface: forwarding non-loopback packet (dst: %s) to reroute channel", ipv4.DstIP)
+		}
+		ps.params.loopbackRerouteInputChan <- &newIpPacket
+		return
+	}
+
 	// Determine the Layer 4 protocol
 	protocol := ipv4.Protocol
 
@@ -225,10 +255,10 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 	if exists {
 		conn := value.(*RawIPConn)
 		if Debug {
-			fmt.Printf("pcapSession->processIncomingPacket: Forwarding packet to client inputChan of %s\n", key)
+			fmt.Printf("pcapSession->processIncomingPacket: Forwarding IP packet to client inputChan of %s\n", key)
 		}
-		// Forward the packet to the RawIPConn's input channel
-		conn.inputChan <- packet
+
+		conn.inputChan <- &newIpPacket
 		return
 	}
 
@@ -241,49 +271,17 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 	if exists {
 		conn := value.(*RawIPConn)
 		if Debug {
-			fmt.Printf("pcapSession->processIncomingPacket: Forwarding packet to server inputChan of %s\n", key)
+			fmt.Printf("pcapSession->processIncomingPacket: Forwarding IP packet to server inputChan of %s\n", key)
 		}
-		// Forward the packet to the RawIPConn's input channel
-		conn.inputChan <- packet
+
+		conn.inputChan <- &newIpPacket
 		return
 	}
-
-	/*// Check for TCP 3-way handshake packets originated locally
-	if protocol != layers.IPProtocolTCP {
-		tcpLayer := (*packet).Layer(layers.LayerTypeTCP)
-		if tcpLayer != nil {
-			tcp, _ := tcpLayer.(*layers.TCP)
-
-			// Construct the client connection key (outbound packet) for RawIPConn lookup
-			key = ipv4.SrcIP.String() + ":" + ipv4.DstIP.String() + ":" + protocol.String()
-			ps.sendSynPacket(packet, key, tcp)
-
-			// Construct the server connection key for RawIPConn lookup
-			key = ipv4.SrcIP.String() + ":" + protocol.String()
-			ps.sendSynPacket(packet, key, tcp)
-		}
-	}*/
 
 	if Debug {
 		log.Println("No RawIPConn found for key:", key)
 	}
 }
-
-/*func (ps *pcapSession) sendSynPacket(packet *gopacket.Packet, key string, tcp *layers.TCP) {
-	value, exists := ps.rawIPConnMap.Load(key)
-	if exists {
-		// Check for SYN/SYN-ACK packet
-		if tcp.SYN || (tcp.ACK && len(tcp.Payload) == 0) {
-			if Debug {
-				log.Println("Detected locally originated SYN or zero-length ACK packet")
-			}
-			conn := value.(*RawIPConn)
-			// Forward the packet to the RawIPConn's input channel. Note that it's RawIPConn's resposiblity to tell which ACK belongs to 3-way handshake
-			conn.inputChan <- packet
-			return
-		}
-	}
-}*/
 
 func (ps *pcapSession) handleOutgoingPackets() {
 	defer ps.wg.Done()
@@ -297,55 +295,60 @@ func (ps *pcapSession) handleOutgoingPackets() {
 			var err error
 			options := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
 
-			if (ps.params.iface.Flags & net.FlagLoopback) != 0 {
-				// Loopback interface: No Ethernet layer
+			// get pkt's destination ip
+			ipLayer := (*pkt).Layer(layers.LayerTypeIPv4)
+			if ipLayer == nil {
+				log.Println("pcapSession.handleOutgoingPackets: packet does not contain an IPv4 layer")
+				continue // skip the packet
+			}
+
+			ipv4, _ := ipLayer.(*layers.IPv4)
+			destIP := ipv4.DstIP
+
+			if ps.isLoopback {
+				// Loopback interface: use OS-specific serialization
 				buffer = gopacket.NewSerializeBuffer()
-				// Used for loopback interface
-				lo := layers.Loopback{
-					Family: layers.ProtocolFamilyIPv4,
-				}
-				err = gopacket.SerializeLayers(buffer, options, &lo, gopacket.Payload((*pkt).Data()))
+				err = serializeLoopbackPacket(buffer, options, (*pkt).Data())
 				if err != nil {
-					log.Println("Error serializing packet:", err)
+					log.Println("Error serializing loopback packet:", err)
 					continue
 				}
-			} else { // currently we only support ethernet besides loopback
-				// Ethernet interface: Add Ethernet layer
-				// get pkt's destination ip
-				ipLayer := (*pkt).Layer(layers.LayerTypeIPv4)
-				if ipLayer == nil {
-					log.Println("pcapSession.handleOutgoingPackets: packet does not contain an IPv4 layer")
-					continue // skip the packet
+			} else {
+				// Check if both source and destination IPs are local for non-loopback interfaces
+				srcIsLocal := isLocalIP(ipv4.SrcIP)
+				dstIsLocal := isLocalIP(ipv4.DstIP)
+				if srcIsLocal && dstIsLocal {
+					if Debug {
+						log.Printf("Non-loopback interface: forwarding local packet (src: %s, dst: %s) to reroute channel",
+							ipv4.SrcIP, ipv4.DstIP)
+					}
+					ps.params.loopbackRerouteOutputChan <- pkt
+					return
 				}
 
-				ipv4, _ := ipLayer.(*layers.IPv4)
-				destIP := ipv4.DstIP
-
-				// find out nextHopIP
+				// Ethernet interface handling
 				_, _, gatewayIP, _ := GetLocalIP(destIP)
 				var nextHopIp = destIP
 				if gatewayIP != nil {
 					nextHopIp = gatewayIP
 				}
-				// get remote mac address of nextHopIP
 				dstMAC, err := getRemoteMAC(ps.params.iface, nextHopIp, ps.config.arpRequestTimeout)
 				if err != nil {
 					log.Println("pcapSession.handleOutgoingPackets: failed to retrieve remote mac address:", err)
 					continue
 				}
 
-				// construct ethernet layer
+				buffer = gopacket.NewSerializeBuffer()
 				ethernetLayer := &layers.Ethernet{
 					SrcMAC:       ps.params.iface.HardwareAddr,
 					DstMAC:       dstMAC,
 					EthernetType: layers.EthernetTypeIPv4,
 				}
-
-				// Serialize the full packet including Ethernet layer
-				buffer = gopacket.NewSerializeBuffer()
-				err = gopacket.SerializeLayers(buffer, options, ethernetLayer, gopacket.Payload((*pkt).Data()))
+				err = gopacket.SerializeLayers(buffer, options,
+					ethernetLayer,
+					gopacket.Payload((*pkt).Data()))
 				if err != nil {
-					log.Println("Error serializing packet:", err)
+					log.Println("Error serializing ethernet packet:", err)
 					continue
 				}
 			}
@@ -419,4 +422,30 @@ func mapLength(m *sync.Map) int {
 		return true
 	})
 	return count
+}
+
+func isLocalIP(ip net.IP) bool {
+	if ip.IsLoopback() {
+		return true
+	}
+
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return false
+	}
+
+	for _, iface := range interfaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			if ipnet, ok := addr.(*net.IPNet); ok {
+				if ipnet.IP.Equal(ip) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }

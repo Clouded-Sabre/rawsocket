@@ -23,8 +23,6 @@ import (
 )
 
 const (
-	srcPort = 54321
-
 	// TCP Connection States
 	TCP_NEW = iota
 	TCP_SYN_RECEIVED
@@ -32,17 +30,20 @@ const (
 	TCP_CLOSING // New state for connection termination
 )
 
-var dstPort int
+var writeDstPort int
+var Debug = false
 
 type Config struct {
 	IP                net.IP
+	port              int
 	Protocol          layers.IPProtocol
 	ARPRequestTimeout int
 	ARPCacheTimeout   int
 }
 
 func parseArgs() *Config {
-	ip := flag.String("ip", "", "IP address to listen on (server) or connect to (client)")
+	ip := flag.String("ip", "", "IP address to listen on")
+	port := flag.Int("port", 54321, "service port to listen on")
 	protocol := flag.String("protocol", "tcp", "Protocol to use (tcp/udp)")
 	arpCacheTimeout := flag.Int("arpCacheTimeout", 30, "ARP cache timeout in seconds")
 	arpRequestTimeout := flag.Int("arpRequestTimeout", 60, "ARP request timeout in seconds")
@@ -61,6 +62,12 @@ func parseArgs() *Config {
 		return nil
 	}
 
+	listenPort := *port
+	if listenPort < 0 || listenPort > 65535 {
+		log.Println("Listening port must be between 0 and 65535")
+		return nil
+	}
+
 	// Convert protocol to layers.IPProtocol
 	ipProtocol, err := stringToIPProtocol(*protocol)
 	if err != nil {
@@ -69,6 +76,7 @@ func parseArgs() *Config {
 
 	return &Config{
 		IP:                listenIP,
+		port:              listenPort,
 		Protocol:          ipProtocol,
 		ARPRequestTimeout: *arpRequestTimeout,
 		ARPCacheTimeout:   *arpCacheTimeout,
@@ -120,7 +128,7 @@ func main() {
 	defer listener.Close()
 
 	// Only add tcp dumb server to avoid RST if protocol is TCP
-	serverPort := srcPort // fixed port for now, can be passed via config if needed
+	serverPort := config.port // fixed port for now, can be passed via config if needed
 	if config.Protocol == layers.IPProtocolTCP {
 		listener, err := setupTcpServer(config.IP.String(), serverPort)
 		if err != nil {
@@ -129,10 +137,10 @@ func main() {
 		defer listener.Close()
 
 		// Keep the server running, but do not accept any connections
-		fmt.Printf("Server is listening on port %d but not accepting connections\n", serverPort)
+		fmt.Printf("TCP Server is listening on %s:%d but not accepting connections\n", config.IP.String(), serverPort)
 	}
 
-	fmt.Printf("Server listening on %s:%s\n", config.IP, config.Protocol)
+	fmt.Printf("%s Server listening on %s:%d\n", config.Protocol, config.IP, config.port)
 
 	wg := sync.WaitGroup{}
 	stopChan := make(chan struct{})
@@ -171,9 +179,9 @@ func setupTcpServer(ip string, port int) (*net.TCPListener, error) {
 func sendPacket(conn *rawsocket.RawConnection, dstIP net.IP, message []byte, config *Config) {
 	switch config.Protocol {
 	case layers.IPProtocolUDP:
-		sendUDPPacket(conn, dstIP, message)
+		sendUDPPacket(conn, dstIP, message, config)
 	case layers.IPProtocolTCP:
-		sendTCPPacket(conn, dstIP, message)
+		sendTCPPacket(conn, dstIP, message, config)
 	case layers.IPProtocolICMPv4:
 		sendICMPPacket(conn, dstIP, message)
 	default:
@@ -181,11 +189,11 @@ func sendPacket(conn *rawsocket.RawConnection, dstIP net.IP, message []byte, con
 	}
 }
 
-func sendUDPPacket(conn *rawsocket.RawConnection, dstIP net.IP, message []byte) {
+func sendUDPPacket(conn *rawsocket.RawConnection, dstIP net.IP, message []byte, config *Config) {
 	// Create the UDP layer
 	udpLayer := &layers.UDP{
-		SrcPort: srcPort,
-		DstPort: layers.UDPPort(dstPort),
+		SrcPort: layers.UDPPort(config.port),
+		DstPort: layers.UDPPort(writeDstPort),
 		Length:  8 + uint16(len(message)), // UDP header length + payload length
 	}
 
@@ -222,7 +230,7 @@ func sendUDPPacket(conn *rawsocket.RawConnection, dstIP net.IP, message []byte) 
 	}
 }
 
-func sendTCPPacket(conn *rawsocket.RawConnection, dstIP net.IP, message []byte) {
+func sendTCPPacket(conn *rawsocket.RawConnection, dstIP net.IP, message []byte, config *Config) {
 	srcIP := getSrcIP(conn)
 
 	// Get client from map
@@ -235,10 +243,10 @@ func sendTCPPacket(conn *rawsocket.RawConnection, dstIP net.IP, message []byte) 
 	}
 
 	tcpLayer := &layers.TCP{
-		SrcPort: layers.TCPPort(srcPort),
-		DstPort: layers.TCPPort(dstPort),
+		SrcPort: layers.TCPPort(config.port),
+		DstPort: layers.TCPPort(writeDstPort),
 		Seq:     client.nextSeq,
-		Ack:     client.expectedAck,
+		Ack:     client.nextAck,
 		Window:  1500,
 		ACK:     true,
 		PSH:     true,
@@ -285,13 +293,13 @@ func sendICMPPacket(conn *rawsocket.RawConnection, dstIP net.IP, message []byte)
 }
 
 type client struct {
-	IP          net.IP
-	inputChan   chan []byte
-	count       int
-	tcpState    int
-	nextSeq     uint32
-	expectedAck uint32
-	theirSeq    uint32
+	IP        net.IP
+	inputChan chan []byte
+	count     int
+	tcpState  int
+	nextSeq   uint32
+	nextAck   uint32
+	//theirSeq    uint32
 }
 
 func newClient(IP net.IP) (*client, error) {
@@ -307,7 +315,7 @@ func newClient(IP net.IP) (*client, error) {
 func receivePackets(conn *rawsocket.RawConnection, config *Config, outputChan chan *packetVector, stopChan chan struct{}, wg *sync.WaitGroup) {
 	defer wg.Done()
 
-	buffer := make([]byte, 1024)
+	buffer := make([]byte, 4096)
 	for {
 		select {
 		case <-stopChan:
@@ -330,6 +338,34 @@ func receivePackets(conn *rawsocket.RawConnection, config *Config, outputChan ch
 				return
 			}
 
+			// First check if this packet is for our service
+			var dstPort int
+			if config.Protocol == layers.IPProtocolTCP {
+				tcpLayer := &layers.TCP{}
+				err := tcpLayer.DecodeFromBytes(buffer[:n], gopacket.NilDecodeFeedback)
+				if err != nil {
+					fmt.Println("Error decoding TCP layer:", err)
+					continue
+				}
+				dstPort = int(tcpLayer.DstPort)
+			} else if config.Protocol == layers.IPProtocolUDP {
+				udpLayer := &layers.UDP{}
+				err := udpLayer.DecodeFromBytes(buffer[:n], gopacket.NilDecodeFeedback)
+				if err != nil {
+					fmt.Println("Error decoding UDP layer:", err)
+					continue
+				}
+				dstPort = int(udpLayer.DstPort)
+			}
+
+			// Verify this packet is for our service
+			if dstPort != config.port {
+				if Debug {
+					log.Printf("Ignoring packet: wrong destination port. Expected %d, got %d\n", config.port, dstPort)
+				}
+				continue
+			}
+
 			srcIP := addr.String()
 			mu.Lock()
 			cl, exists := clientMap[srcIP]
@@ -343,13 +379,14 @@ func receivePackets(conn *rawsocket.RawConnection, config *Config, outputChan ch
 
 			// Determine the transport layer protocol and update dstPort accordingly
 			if config.Protocol == layers.IPProtocolTCP {
+				//log.Println("Received TCP packet from", srcIP, "with length", n)
 				tcpLayer := &layers.TCP{}
 				err := tcpLayer.DecodeFromBytes(buffer[:n], gopacket.NilDecodeFeedback)
 				if err != nil {
 					fmt.Println("Error decoding TCP layer:", err)
 					continue
 				}
-				dstPort = int(tcpLayer.SrcPort) // Update dstPort with the TCP source port
+				writeDstPort = int(tcpLayer.SrcPort) // Update dstPort with the TCP source port
 			} else if config.Protocol == layers.IPProtocolUDP {
 				udpLayer := &layers.UDP{}
 				err := udpLayer.DecodeFromBytes(buffer[:n], gopacket.NilDecodeFeedback)
@@ -357,7 +394,7 @@ func receivePackets(conn *rawsocket.RawConnection, config *Config, outputChan ch
 					fmt.Println("Error decoding UDP layer:", err)
 					continue
 				}
-				dstPort = int(udpLayer.SrcPort) // Update dstPort with the UDP source port
+				writeDstPort = int(udpLayer.SrcPort) // Update dstPort with the UDP source port
 			}
 
 			cl.inputChan <- buffer[:n]
@@ -403,24 +440,25 @@ func handleIncomingPackets(client *client, config *Config, outputChan chan *pack
 				case TCP_NEW:
 					if tcpLayer.SYN {
 						// Received SYN, the kernel will send SYN-ACK
-						client.theirSeq = tcpLayer.Seq
-						client.expectedAck = tcpLayer.Seq + 1
+						//client.theirSeq = tcpLayer.Seq
+						client.nextAck = tcpLayer.Seq + 1
 						client.tcpState = TCP_SYN_RECEIVED
-						log.Printf("Received SYN from %s, seq=%d\n", client.IP, tcpLayer.Seq)
+						log.Printf("Received SYN from %s:%d, seq=%d\n", client.IP, tcpLayer.SrcPort, tcpLayer.Seq)
 					}
 				case TCP_SYN_RECEIVED:
 					if tcpLayer.ACK {
 						// Received final ACK of 3-way handshake
 						client.tcpState = TCP_ESTABLISHED
 						client.nextSeq = tcpLayer.Ack
-						log.Printf("Connection established with %s\n", client.IP)
+						log.Printf("Connection established with %s:%d, ack=%d\n", client.IP, tcpLayer.SrcPort, tcpLayer.Ack)
 					}
 				case TCP_ESTABLISHED:
 					if len(tcpLayer.Payload) > 0 {
 						// Normal data packet
-						client.theirSeq = tcpLayer.Seq
-						client.expectedAck = tcpLayer.Seq + uint32(len(tcpLayer.Payload))
+						//client.nextSeq = tcpLayer.Seq
 
+						client.nextAck = tcpLayer.Seq + uint32(len(tcpLayer.Payload))
+						log.Printf("Connection got data packet from %s:%d, len=%d\n", client.IP, tcpLayer.SrcPort, len(tcpLayer.Payload))
 						pv := &packetVector{
 							packetByteSlice: tcpLayer.Payload,
 							destIP:          client.IP,

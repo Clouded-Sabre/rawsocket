@@ -86,14 +86,10 @@ func (conn *RawIPConn) Read(buffer []byte) (int, error) {
 	// Dereference the packet to access its methods
 	pkt := *packet
 
-	// Extract the Ethernet layer to get the full IP packet
-	if ethLayer := pkt.Layer(layers.LayerTypeEthernet); ethLayer != nil {
-		eth, _ := ethLayer.(*layers.Ethernet)
-		copy(buffer, eth.Payload) // Copy the Ethernet payload (which is the IP packet) into the buffer
-		return len(eth.Payload), nil
-	}
-
-	return 0, fmt.Errorf("no valid IP layer found")
+	// Get the raw packet data
+	rawData := pkt.Data()
+	copy(buffer, rawData)
+	return len(rawData), nil
 }
 
 // ReadFrom reads a packet from the RawIPConn and returns the payload and the source address.
@@ -128,8 +124,9 @@ func (conn *RawIPConn) ReadFrom(buffer []byte) (int, net.Addr, error) {
 	// Extract the L4 payload and source IP
 	if ipLayer := (*packet).Layer(layers.LayerTypeIPv4); ipLayer != nil {
 		ip, _ := ipLayer.(*layers.IPv4)
+		//log.Println("ReadFrom: got ip packet with length", ip.Length)
 		if ip.Protocol == conn.config.protocol {
-			copy(buffer, ip.Payload)
+			copy(buffer, ip.Payload) // copy the payload to the buffer
 			return len(ip.Payload), &net.IPAddr{IP: ip.SrcIP}, nil
 		}
 	}

@@ -10,19 +10,23 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 )
 
 type RawSocketCore struct {
-	mu                  sync.RWMutex
-	pcapSessionMap      map[string]*pcapSession
-	arpCacheTimeout     time.Duration
-	arpRequestTimeout   time.Duration
-	pcapSessionCloseSig chan *pcapSession
-	arpCache            *ARPCache
-	stopChan            chan struct{}
-	wg                  sync.WaitGroup
-	isClosed            bool
+	mu                        sync.RWMutex
+	pcapSessionMap            map[string]*pcapSession
+	loopbackRerouteInputChan  chan *gopacket.Packet
+	loopbackRerouteOutputChan chan *gopacket.Packet
+	loopbackPcapSession       *pcapSession
+	arpCacheTimeout           time.Duration
+	arpRequestTimeout         time.Duration
+	pcapSessionCloseSig       chan *pcapSession
+	arpCache                  *ARPCache
+	stopChan                  chan struct{}
+	wg                        sync.WaitGroup
+	isClosed                  bool
 }
 
 var Debug = false
@@ -34,21 +38,82 @@ const (
 
 func NewRawSocketCore(arpCacheTimeout, arpRequestTimeout int, debug bool) *RawSocketCore {
 	core := &RawSocketCore{
-		pcapSessionMap:      make(map[string]*pcapSession),
-		arpCacheTimeout:     time.Duration(arpCacheTimeout) * time.Second,
-		arpRequestTimeout:   time.Duration(arpRequestTimeout) * time.Second,
-		pcapSessionCloseSig: make(chan *pcapSession),
-		arpCache:            NewARPCache(time.Duration(arpCacheTimeout) * time.Second),
-		stopChan:            make(chan struct{}),
-		wg:                  sync.WaitGroup{},
+		pcapSessionMap:            make(map[string]*pcapSession),
+		loopbackRerouteInputChan:  make(chan *gopacket.Packet),
+		loopbackRerouteOutputChan: make(chan *gopacket.Packet),
+		arpCacheTimeout:           time.Duration(arpCacheTimeout) * time.Second,
+		arpRequestTimeout:         time.Duration(arpRequestTimeout) * time.Second,
+		pcapSessionCloseSig:       make(chan *pcapSession),
+		arpCache:                  NewARPCache(time.Duration(arpCacheTimeout) * time.Second),
+		stopChan:                  make(chan struct{}),
+		wg:                        sync.WaitGroup{},
 	}
 
 	Debug = debug
 
+	// Find loopback interfaces and create loopback pcap sessions
+	loIfaces, err := getLoopbackInterfaces()
+	if err != nil {
+		return nil
+	}
+
+	// Use the first loopback interface as the main one
+	loConfig := &pcapSessionConfig{
+		arpRequestTimeout: time.Duration(arpRequestTimeout) * time.Second,
+	}
+
+	// Create pcap sessions for all loopback interfaces
+	for _, loIface := range loIfaces {
+		loParams := &pcapSessionParams{
+			key:                      loIface.Name,
+			iface:                    loIface,
+			loopbackRerouteInputChan: core.loopbackRerouteInputChan,
+			pcapSessionCloseSig:      core.pcapSessionCloseSig,
+			arpCache:                 core.arpCache,
+		}
+
+		ps, err := newPcapSession(loParams, loConfig)
+		if err != nil {
+			continue // Skip this interface if we can't create a session
+		}
+
+		core.pcapSessionMap[loIface.Name] = ps
+		if core.loopbackPcapSession == nil {
+			core.loopbackPcapSession = ps // Use first successful session as main loopback
+		}
+	}
+
+	if core.loopbackPcapSession == nil {
+		return nil // No loopback interface could be initialized
+	}
+
 	core.wg.Add(1)
 	go core.handlePcapSessionClose()
 
+	go core.handleLoopbackRerouteInputPackets()
+	go core.handleLoopbackRerouteOutputPackets()
+
 	return core
+}
+
+func getLoopbackInterfaces() ([]*net.Interface, error) {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil, err
+	}
+
+	var loopbacks []*net.Interface
+	for i := range interfaces {
+		if interfaces[i].Flags&net.FlagLoopback != 0 {
+			loopbacks = append(loopbacks, &interfaces[i])
+		}
+	}
+
+	if len(loopbacks) == 0 {
+		return nil, fmt.Errorf("no loopback interface found")
+	}
+
+	return loopbacks, nil
 }
 
 func (core *RawSocketCore) DialIP(protocol layers.IPProtocol, srcIP, dstIP net.IP) (*RawIPConn, error) {
@@ -91,10 +156,12 @@ func (core *RawSocketCore) DialIP(protocol layers.IPProtocol, srcIP, dstIP net.I
 		}
 
 		params := &pcapSessionParams{
-			key:                 iface.Name,
-			iface:               iface,
-			pcapSessionCloseSig: core.pcapSessionCloseSig,
-			arpCache:            core.arpCache,
+			key:                       iface.Name,
+			loopbackRerouteInputChan:  core.loopbackRerouteInputChan,
+			loopbackRerouteOutputChan: core.loopbackRerouteOutputChan,
+			iface:                     iface,
+			pcapSessionCloseSig:       core.pcapSessionCloseSig,
+			arpCache:                  core.arpCache,
 			// handle will be added in NewPcapSession
 		}
 
@@ -136,10 +203,12 @@ func (core *RawSocketCore) ListenIP(ip net.IP, protocol layers.IPProtocol) (*Raw
 		}
 
 		params := &pcapSessionParams{
-			key:                 iface.Name,
-			iface:               iface,
-			pcapSessionCloseSig: core.pcapSessionCloseSig,
-			arpCache:            core.arpCache,
+			key:                       iface.Name,
+			loopbackRerouteInputChan:  core.loopbackRerouteInputChan,
+			loopbackRerouteOutputChan: core.loopbackRerouteOutputChan,
+			iface:                     iface,
+			pcapSessionCloseSig:       core.pcapSessionCloseSig,
+			arpCache:                  core.arpCache,
 			// handle will be added in NewPcapSession
 		}
 		ps, err = newPcapSession(params, conf)
@@ -170,6 +239,86 @@ func (core *RawSocketCore) handlePcapSessionClose() {
 			core.mu.Lock()
 			delete(core.pcapSessionMap, ps.params.key)
 			core.mu.Unlock()
+		}
+	}
+}
+
+func (core *RawSocketCore) handleLoopbackRerouteInputPackets() {
+	core.wg.Add(1)
+	defer core.wg.Done()
+
+	for {
+		select {
+		case <-core.stopChan:
+			return
+		case packet := <-core.loopbackRerouteInputChan:
+			// Extract IP layer
+			ipLayer := (*packet).Layer(layers.LayerTypeIPv4)
+			if ipLayer == nil {
+				if Debug {
+					log.Println("handleLoopbackRerouteInputPackets: Not an IPv4 packet")
+				}
+				continue
+			}
+
+			ipv4, ok := ipLayer.(*layers.IPv4)
+			if !ok {
+				if Debug {
+					log.Println("handleLoopbackRerouteInputPackets: Failed to parse IPv4 layer")
+				}
+				continue
+			}
+
+			// Search all pcap sessions for matching connection based on destination IP
+			core.mu.RLock()
+			found := false
+			for _, session := range core.pcapSessionMap {
+				// Skip loopback session
+				if session.isLoopback {
+					continue
+				}
+
+				// Search through all connections in this session
+				session.rawIPConnMap.Range(func(key, value interface{}) bool {
+					conn := value.(*RawIPConn)
+					// Check if this connection's local IP matches packet's destination IP
+					if conn.config.localIP.Equal(ipv4.DstIP) {
+						if Debug {
+							log.Printf("handleLoopbackRerouteInputPackets: Found matching connection for dst=%s", ipv4.DstIP)
+						}
+						conn.inputChan <- packet
+						found = true
+						return false // stop iterating
+					}
+					return true // continue iterating
+				})
+
+				if found {
+					break
+				}
+			}
+			core.mu.RUnlock()
+
+			if !found && Debug {
+				log.Printf("handleLoopbackRerouteInputPackets: No connection found for packet dst=%s src=%s proto=%s",
+					ipv4.DstIP, ipv4.SrcIP, ipv4.Protocol)
+			}
+		}
+	}
+}
+
+func (core *RawSocketCore) handleLoopbackRerouteOutputPackets() {
+	core.wg.Add(1)
+	defer core.wg.Done()
+
+	for {
+		select {
+		case <-core.stopChan:
+			return
+		case packet := <-core.loopbackRerouteOutputChan:
+			if core.loopbackPcapSession != nil && packet != nil {
+				core.loopbackPcapSession.outgoingPackets <- packet
+			}
 		}
 	}
 }
