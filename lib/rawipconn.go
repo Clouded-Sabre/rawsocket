@@ -139,6 +139,10 @@ func (conn *RawIPConn) Write(data []byte) (int, error) {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 
+	// Create a copy of the input data to prevent external modifications
+	dataCopy := make([]byte, len(data))
+	copy(dataCopy, data)
+
 	// Create the L3 packet (IPv4 layer)
 	ipLayer := &layers.IPv4{
 		Version:  4,
@@ -152,7 +156,7 @@ func (conn *RawIPConn) Write(data []byte) (int, error) {
 	// Serialize the packet.
 	buffer := gopacket.NewSerializeBuffer()
 	options := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
-	err := gopacket.SerializeLayers(buffer, options, ipLayer, gopacket.Payload(data))
+	err := gopacket.SerializeLayers(buffer, options, ipLayer, gopacket.Payload(dataCopy))
 	if err != nil {
 		return 0, err
 	}
@@ -170,6 +174,10 @@ func (conn *RawIPConn) Write(data []byte) (int, error) {
 func (conn *RawIPConn) WriteTo(data []byte, addr net.Addr) (int, error) {
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
+
+	// Create a copy of the input data to prevent external modifications
+	dataCopy := make([]byte, len(data))
+	copy(dataCopy, data)
 
 	// Type assert the address to net.IPAddr
 	ipAddr, ok := addr.(*net.IPAddr)
@@ -190,7 +198,7 @@ func (conn *RawIPConn) WriteTo(data []byte, addr net.Addr) (int, error) {
 	// Serialize the packet.
 	buffer := gopacket.NewSerializeBuffer()
 	options := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
-	err := gopacket.SerializeLayers(buffer, options, ipLayer, gopacket.Payload(data))
+	err := gopacket.SerializeLayers(buffer, options, ipLayer, gopacket.Payload(dataCopy))
 	if err != nil {
 		return 0, err
 	}
