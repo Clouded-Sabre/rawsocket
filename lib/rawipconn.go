@@ -162,10 +162,14 @@ func (conn *RawIPConn) Write(data []byte) (int, error) {
 	}
 
 	// Create a gopacket.Packet from the serialized data
-	packet := gopacket.NewPacket(buffer.Bytes(), layers.LayerTypeIPv4, gopacket.Default)
+	raw := buffer.Bytes()
+	packet := gopacket.NewPacket(raw, layers.LayerTypeIPv4, gopacket.Default)
+
+	// Make a local copy of the Packet struct
+	pktCopy := packet
 
 	// Send the L3 packet to pcapSession's outputChan
-	conn.params.outputChan <- &packet
+	conn.params.outputChan <- &pktCopy
 
 	return len(data), nil
 }
@@ -204,10 +208,14 @@ func (conn *RawIPConn) WriteTo(data []byte, addr net.Addr) (int, error) {
 	}
 
 	// Create a gopacket.Packet from the serialized data
-	packet := gopacket.NewPacket(buffer.Bytes(), layers.LayerTypeIPv4, gopacket.Default)
+	raw := buffer.Bytes()
+	packet := gopacket.NewPacket(raw, layers.LayerTypeIPv4, gopacket.Default)
+
+	// Make a local copy of the Packet struct
+	pktCopy := packet
 
 	// Send the L3 packet to pcapSession's outputChan
-	conn.params.outputChan <- &packet
+	conn.params.outputChan <- &pktCopy
 
 	return len(data), nil
 }
