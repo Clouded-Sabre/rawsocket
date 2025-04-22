@@ -32,8 +32,8 @@ type RawSocketCore struct {
 var Debug = false
 
 const (
-	arpCacheTimeoutDefault   = 30 // seconds
-	arpRequestTimeoutDefault = 60 // seconds
+	arpCacheTimeoutDefault   = 300 // 5 minutes
+	arpRequestTimeoutDefault = 2   // seconds
 )
 
 func NewRawSocketCore(arpCacheTimeout, arpRequestTimeout int, debug bool) *RawSocketCore {

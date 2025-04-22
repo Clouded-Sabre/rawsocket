@@ -29,14 +29,12 @@ func NewARPCache(timeout time.Duration) *ARPCache {
 	cache := &ARPCache{
 		entries:      make(map[string]ARPEntry),
 		timeout:      timeout,
-		timeoutTimer: time.NewTimer(timeout), // Initialize the timer
-		stopChan:     make(chan struct{}),    // Initialize the stop channel
+		timeoutTimer: time.NewTimer(timeout),
+		stopChan:     make(chan struct{}),
 		wg:           sync.WaitGroup{},
 	}
-
 	cache.wg.Add(1)
-	go cache.cleanup() // Start background cleanup process
-
+	go cache.cleanup()
 	return cache
 }
 
@@ -47,21 +45,35 @@ func (cache *ARPCache) Add(ip string, mac net.HardwareAddr) {
 		MacAddress: mac,
 		Expiry:     time.Now().Add(cache.timeout),
 	}
+	if Debug {
+		log.Printf("ARPCache: Added IP %s -> MAC %s", ip, mac)
+	}
 }
 
 func (cache *ARPCache) Lookup(ip string) (net.HardwareAddr, bool) {
 	cache.mu.RLock()
 	defer cache.mu.RUnlock()
 	entry, found := cache.entries[ip]
-	if !found || time.Now().After(entry.Expiry) {
+	if !found {
+		if Debug {
+			log.Printf("ARPCache: Miss for IP %s (not found)", ip)
+		}
 		return nil, false
+	}
+	if time.Now().After(entry.Expiry) {
+		if Debug {
+			log.Printf("ARPCache: Miss for IP %s (expired)", ip)
+		}
+		return nil, false
+	}
+	if Debug {
+		log.Printf("ARPCache: Hit for IP %s -> MAC %s", ip, entry.MacAddress)
 	}
 	return entry.MacAddress, true
 }
 
 func (cache *ARPCache) cleanup() {
 	defer cache.wg.Done()
-
 	for {
 		select {
 		case <-cache.timeoutTimer.C:
@@ -70,14 +82,17 @@ func (cache *ARPCache) cleanup() {
 			for ip, entry := range cache.entries {
 				if now.After(entry.Expiry) {
 					delete(cache.entries, ip)
+					if Debug {
+						log.Printf("ARPCache: Removed expired IP %s", ip)
+					}
 				}
 			}
 			cache.mu.Unlock()
 			if !cache.isClosed {
-				cache.timeoutTimer.Reset(time.Minute) // Reset the timer for the next interval
+				cache.timeoutTimer.Reset(cache.timeout) // Align with cache.timeout
 			}
 		case <-cache.stopChan:
-			return // Graceful shutdown
+			return
 		}
 	}
 }
@@ -87,10 +102,8 @@ func (cache *ARPCache) Close() {
 		return
 	}
 	cache.isClosed = true
-
-	close(cache.stopChan) // Signal the stop channel
+	close(cache.stopChan)
 	cache.wg.Wait()
-
 	cache.timeoutTimer.Stop()
-	log.Println("arp cache stopped.")
+	log.Println("ARPCache stopped.")
 }

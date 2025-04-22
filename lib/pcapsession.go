@@ -295,18 +295,16 @@ func (ps *pcapSession) handleOutgoingPackets() {
 			var err error
 			options := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
 
-			// get pkt's destination ip
 			ipLayer := (*pkt).Layer(layers.LayerTypeIPv4)
 			if ipLayer == nil {
 				log.Println("pcapSession.handleOutgoingPackets: packet does not contain an IPv4 layer")
-				continue // skip the packet
+				continue
 			}
 
 			ipv4, _ := ipLayer.(*layers.IPv4)
 			destIP := ipv4.DstIP
 
 			if ps.isLoopback {
-				// Loopback interface: use OS-specific serialization
 				buffer = gopacket.NewSerializeBuffer()
 				err = serializeLoopbackPacket(buffer, options, (*pkt).Data())
 				if err != nil {
@@ -314,7 +312,6 @@ func (ps *pcapSession) handleOutgoingPackets() {
 					continue
 				}
 			} else {
-				// Check if both source and destination IPs are local for non-loopback interfaces
 				srcIsLocal := isLocalIP(ipv4.SrcIP)
 				dstIsLocal := isLocalIP(ipv4.DstIP)
 				if srcIsLocal && dstIsLocal {
@@ -323,16 +320,15 @@ func (ps *pcapSession) handleOutgoingPackets() {
 							ipv4.SrcIP, ipv4.DstIP)
 					}
 					ps.params.loopbackRerouteOutputChan <- pkt
-					return
+					continue
 				}
 
-				// Ethernet interface handling
 				_, _, gatewayIP, _ := GetLocalIP(destIP)
 				var nextHopIp = destIP
 				if gatewayIP != nil {
 					nextHopIp = gatewayIP
 				}
-				dstMAC, err := getRemoteMAC(ps.params.iface, nextHopIp, ps.config.arpRequestTimeout)
+				dstMAC, err := getRemoteMAC(ps.params.iface, nextHopIp, ps.config.arpRequestTimeout, ps.params.arpCache, ps.params.handle)
 				if err != nil {
 					log.Println("pcapSession.handleOutgoingPackets: failed to retrieve remote mac address:", err)
 					continue
@@ -353,7 +349,6 @@ func (ps *pcapSession) handleOutgoingPackets() {
 				}
 			}
 
-			// Write the raw packet data to the pcap handle
 			if err := ps.params.handle.WritePacketData(buffer.Bytes()); err != nil {
 				log.Println("Error writing packet:", err)
 			}

@@ -17,13 +17,16 @@ import (
 )
 
 // getRemoteMAC sends an ARP request to get the MAC address for a given IP and interface
-func getRemoteMAC(iface *net.Interface, ip net.IP, arpRequestTimeout time.Duration) (net.HardwareAddr, error) {
-	// Open up a pcap handle for packet reads/writes.
-	handle, err := pcap.OpenLive(getPcapDeviceName(iface), 65536, true, pcap.BlockForever)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open pcap handle: %w", err)
+func getRemoteMAC(iface *net.Interface, ip net.IP, arpRequestTimeout time.Duration, arpCache *ARPCache, handle *pcap.Handle) (net.HardwareAddr, error) {
+	// Check ARP cache first
+	if mac, found := arpCache.Lookup(ip.String()); found {
+		return mac, nil
 	}
-	defer handle.Close()
+
+	// Use provided pcap handle
+	if handle == nil {
+		return nil, fmt.Errorf("nil pcap handle provided")
+	}
 
 	// Set up a channel to receive ARP replies
 	arpReplies := make(chan net.HardwareAddr, 1)
@@ -41,9 +44,10 @@ func getRemoteMAC(iface *net.Interface, ip net.IP, arpRequestTimeout time.Durati
 	// Wait for ARP reply or timeout
 	select {
 	case mac := <-arpReplies:
+		arpCache.Add(ip.String(), mac) // Cache the result
 		return mac, nil
 	case <-time.After(arpRequestTimeout):
-		return nil, fmt.Errorf("timeout waiting for ARP reply")
+		return nil, fmt.Errorf("timeout waiting for ARP reply for IP %s", ip)
 	}
 }
 
