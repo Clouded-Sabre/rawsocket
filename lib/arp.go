@@ -57,16 +57,23 @@ func readARP(handle *pcap.Handle, iface *net.Interface, targetIP net.IP, arpRepl
 	in := src.Packets()
 
 	for packet := range in {
+		log.Printf("Captured packet: %v", packet)
 		arpLayer := packet.Layer(layers.LayerTypeARP)
 		if arpLayer == nil {
 			continue
+		} else {
+			arp := arpLayer.(*layers.ARP)
+			log.Printf("ARP packet: Operation=%v, SourceProtAddress=%v, SourceHwAddress=%v",
+				arp.Operation, net.IP(arp.SourceProtAddress), net.HardwareAddr(arp.SourceHwAddress))
 		}
+		log.Println("ARP layer detected")
 		arp := arpLayer.(*layers.ARP)
 		if arp.Operation != layers.ARPReply || bytes.Equal([]byte(iface.HardwareAddr), arp.SourceHwAddress) {
 			continue
 		}
 		if net.IP(arp.SourceProtAddress).Equal(targetIP) {
 			arpReplies <- net.HardwareAddr(arp.SourceHwAddress)
+			log.Println("ARP reply sent to channel")
 			return
 		}
 	}
