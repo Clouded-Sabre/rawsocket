@@ -63,6 +63,7 @@ func readARP(handle *pcap.Handle, iface *net.Interface, targetIP net.IP, arpRepl
 		log.Printf("Captured packet: %v", packet)
 		arpLayer := packet.Layer(layers.LayerTypeARP)
 		if arpLayer == nil {
+			log.Println("No ARP layer found in packet")
 			continue
 		} else {
 			arp := arpLayer.(*layers.ARP)
