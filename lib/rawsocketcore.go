@@ -93,6 +93,8 @@ func NewRawSocketCore(arpCacheTimeout, arpRequestTimeout int, debug bool) *RawSo
 	go core.handleLoopbackRerouteInputPackets()
 	go core.handleLoopbackRerouteOutputPackets()
 
+	log.Println("Raw Socket Core initialized successfully.")
+
 	return core
 }
 
