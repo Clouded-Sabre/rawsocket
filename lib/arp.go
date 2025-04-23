@@ -18,6 +18,7 @@ import (
 
 // getRemoteMAC sends an ARP request to get the MAC address for a given IP and interface
 func getRemoteMAC(iface *net.Interface, ip net.IP, arpRequestTimeout time.Duration, arpCache *ARPCache, handle *pcap.Handle) (net.HardwareAddr, error) {
+	log.Printf("Getting remote MAC address for ip %s...\n", ip)
 	// Check ARP cache first
 	if mac, found := arpCache.Lookup(ip.String()); found {
 		return mac, nil
