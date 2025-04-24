@@ -68,6 +68,9 @@ func (conn *RawIPConn) Read(buffer []byte) (int, error) {
 	deadline := conn.readDeadline
 	conn.mu.Unlock()
 
+	// Time the channel read operation
+	chanReadStart := time.Now()
+
 	// Handle the read deadline
 	if !deadline.IsZero() {
 		if time.Now().After(deadline) {
@@ -90,6 +93,11 @@ func (conn *RawIPConn) Read(buffer []byte) (int, error) {
 		}
 	}
 
+	log.Printf("chanRead: Time taken: %v\n", time.Since(chanReadStart))
+
+	// Time the packet processing
+	processStart := time.Now()
+
 	// Dereference the packet to access its methods
 	pkt := *packet
 
@@ -97,7 +105,9 @@ func (conn *RawIPConn) Read(buffer []byte) (int, error) {
 	rawData := pkt.Data()
 	copy(buffer, rawData)
 
-	log.Printf("Read: Time taken: %v\n", time.Since(startTime))
+	log.Printf("Read: Packet processing took: %v", time.Since(processStart))
+
+	log.Printf("Read: Total time taken: %v\n", time.Since(startTime))
 
 	return len(rawData), nil
 }
