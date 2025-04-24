@@ -57,30 +57,36 @@ func NewRawIPConn(params *RawIPConnParams, config *RawIPConnConfig) (*RawIPConn,
 // Read reads data from the RawIPConn.
 func (conn *RawIPConn) Read(buffer []byte) (int, error) {
 	startTime := time.Now() // Start timing
-	conn.mu.Lock()
-	defer conn.mu.Unlock()
 
 	var (
 		packet *gopacket.Packet
 		ok     bool
 	)
 
-	// Check if the read deadline is in the past
-	if time.Now().After(conn.readDeadline) {
-		// Perform a blocking read
-		packet, ok = <-conn.inputChan
-		if !ok {
-			return 0, fmt.Errorf("connection closed")
+	// Only lock when accessing shared state
+	conn.mu.Lock()
+	deadline := conn.readDeadline
+	conn.mu.Unlock()
+
+	// Handle the read deadline
+	if !deadline.IsZero() {
+		if time.Now().After(deadline) {
+			return 0, &TimeoutError{msg: "read timeout"}
 		}
-	} else {
-		// Non-blocking read
+		// Non-blocking read with timeout
 		select {
 		case packet, ok = <-conn.inputChan:
 			if !ok {
 				return 0, fmt.Errorf("connection closed")
 			}
-		case <-time.After(time.Until(conn.readDeadline)):
+		case <-time.After(time.Until(deadline)):
 			return 0, &TimeoutError{msg: "read timeout"}
+		}
+	} else {
+		// Blocking read when no deadline set
+		packet, ok = <-conn.inputChan
+		if !ok {
+			return 0, fmt.Errorf("connection closed")
 		}
 	}
 
@@ -99,30 +105,36 @@ func (conn *RawIPConn) Read(buffer []byte) (int, error) {
 // ReadFrom reads a packet from the RawIPConn and returns the payload and the source address.
 func (conn *RawIPConn) ReadFrom(buffer []byte) (int, net.Addr, error) {
 	startTime := time.Now() // Start timing
-	conn.mu.Lock()
-	defer conn.mu.Unlock()
 
 	var (
 		packet *gopacket.Packet
 		ok     bool
 	)
 
-	// Check if the read deadline is in the past
-	if time.Now().After(conn.readDeadline) {
-		// Perform a blocking read
-		packet, ok = <-conn.inputChan
-		if !ok {
-			return 0, nil, fmt.Errorf("connection closed")
+	// Only lock when accessing shared state
+	conn.mu.Lock()
+	deadline := conn.readDeadline
+	conn.mu.Unlock()
+
+	// Handle the read deadline
+	if !deadline.IsZero() {
+		if time.Now().After(deadline) {
+			return 0, nil, &TimeoutError{msg: "read timeout"}
 		}
-	} else {
-		// Non-blocking read
+		// Non-blocking read with timeout
 		select {
 		case packet, ok = <-conn.inputChan:
 			if !ok {
 				return 0, nil, fmt.Errorf("connection closed")
 			}
-		case <-time.After(time.Until(conn.readDeadline)):
+		case <-time.After(time.Until(deadline)):
 			return 0, nil, &TimeoutError{msg: "read timeout"}
+		}
+	} else {
+		// Blocking read when no deadline set
+		packet, ok = <-conn.inputChan
+		if !ok {
+			return 0, nil, fmt.Errorf("connection closed")
 		}
 	}
 
