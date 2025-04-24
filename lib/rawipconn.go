@@ -56,6 +56,7 @@ func NewRawIPConn(params *RawIPConnParams, config *RawIPConnConfig) (*RawIPConn,
 
 // Read reads data from the RawIPConn.
 func (conn *RawIPConn) Read(buffer []byte) (int, error) {
+	startTime := time.Now() // Start timing
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 
@@ -89,11 +90,15 @@ func (conn *RawIPConn) Read(buffer []byte) (int, error) {
 	// Get the raw packet data
 	rawData := pkt.Data()
 	copy(buffer, rawData)
+
+	log.Printf("Read: Time taken: %v\n", time.Since(startTime))
+
 	return len(rawData), nil
 }
 
 // ReadFrom reads a packet from the RawIPConn and returns the payload and the source address.
 func (conn *RawIPConn) ReadFrom(buffer []byte) (int, net.Addr, error) {
+	startTime := time.Now() // Start timing
 	conn.mu.Lock()
 	defer conn.mu.Unlock()
 
@@ -130,6 +135,8 @@ func (conn *RawIPConn) ReadFrom(buffer []byte) (int, net.Addr, error) {
 			return len(ip.Payload), &net.IPAddr{IP: ip.SrcIP}, nil
 		}
 	}
+
+	log.Printf("ReadFrom: Time taken: %v\n", time.Since(startTime))
 
 	return 0, nil, fmt.Errorf("no valid L4 payload found")
 }

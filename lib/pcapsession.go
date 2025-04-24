@@ -192,6 +192,8 @@ func (ps *pcapSession) handleIncomingPackets() {
 
 // processPacket processes an incoming packet and forwards it to the appropriate RawIPConn
 func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
+	startTime := time.Now() // Start timing
+
 	// Extract the IPv4 layer
 	ipLayer := (*packet).Layer(layers.LayerTypeIPv4)
 	if ipLayer == nil {
@@ -281,6 +283,8 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 	if Debug {
 		log.Println("No RawIPConn found for key:", key)
 	}
+
+	log.Printf("processIncomingPacket: Time taken: %v\n", time.Since(startTime))
 }
 
 func (ps *pcapSession) handleOutgoingPackets() {
