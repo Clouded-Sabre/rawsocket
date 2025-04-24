@@ -155,9 +155,6 @@ func (conn *RawIPConn) ReadFrom(buffer []byte) (int, net.Addr, error) {
 
 // Write writes data to the RawIPConn.
 func (conn *RawIPConn) Write(data []byte) (int, error) {
-	conn.mu.Lock()
-	defer conn.mu.Unlock()
-
 	// Create a copy of the input data to prevent external modifications
 	dataCopy := make([]byte, len(data))
 	copy(dataCopy, data)
@@ -191,9 +188,6 @@ func (conn *RawIPConn) Write(data []byte) (int, error) {
 
 // WriteTo sends data to the specified destination address.
 func (conn *RawIPConn) WriteTo(data []byte, addr net.Addr) (int, error) {
-	conn.mu.Lock()
-	defer conn.mu.Unlock()
-
 	// Create a copy of the input data to prevent external modifications
 	dataCopy := make([]byte, len(data))
 	copy(dataCopy, data)

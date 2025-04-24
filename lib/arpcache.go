@@ -79,18 +79,25 @@ func (cache *ARPCache) cleanup() {
 		case <-cache.timeoutTimer.C:
 			cache.mu.Lock()
 			now := time.Now()
+			// Collect expired IPs first
+			var expiredIPs []string
 			for ip, entry := range cache.entries {
 				if now.After(entry.Expiry) {
-					delete(cache.entries, ip)
-					if Debug {
-						log.Printf("ARPCache: Removed expired IP %s", ip)
-					}
+					expiredIPs = append(expiredIPs, ip)
 				}
 			}
-			cache.mu.Unlock()
+			// Delete expired entries
+			for _, ip := range expiredIPs {
+				delete(cache.entries, ip)
+				if Debug {
+					log.Printf("ARPCache: Removed expired IP %s", ip)
+				}
+			}
+
 			if !cache.isClosed {
 				cache.timeoutTimer.Reset(cache.timeout) // Align with cache.timeout
 			}
+			cache.mu.Unlock()
 		case <-cache.stopChan:
 			return
 		}
@@ -98,12 +105,16 @@ func (cache *ARPCache) cleanup() {
 }
 
 func (cache *ARPCache) Close() {
+	cache.mu.Lock()
 	if cache.isClosed {
+		cache.mu.Unlock()
 		return
 	}
 	cache.isClosed = true
+	cache.timeoutTimer.Stop()
+	cache.mu.Unlock()
+
 	close(cache.stopChan)
 	cache.wg.Wait()
-	cache.timeoutTimer.Stop()
 	log.Println("ARPCache stopped.")
 }

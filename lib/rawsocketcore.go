@@ -272,15 +272,19 @@ func (core *RawSocketCore) handleLoopbackRerouteInputPackets() {
 			}
 
 			// Search all pcap sessions for matching connection based on destination IP
+			// Copy sessions under lock
 			core.mu.RLock()
-			found := false
+			sessions := make([]*pcapSession, 0, len(core.pcapSessionMap))
 			for _, session := range core.pcapSessionMap {
-				// Skip loopback session
-				if session.isLoopback {
-					continue
+				if !session.isLoopback {
+					sessions = append(sessions, session)
 				}
+			}
+			core.mu.RUnlock()
 
-				// Search through all connections in this session
+			// Process sessions without holding lock
+			found := false
+			for _, session := range sessions {
 				session.rawIPConnMap.Range(func(key, value interface{}) bool {
 					conn := value.(*RawIPConn)
 					// Check if this connection's local IP matches packet's destination IP
@@ -299,7 +303,6 @@ func (core *RawSocketCore) handleLoopbackRerouteInputPackets() {
 					break
 				}
 			}
-			core.mu.RUnlock()
 
 			if !found && Debug {
 				log.Printf("handleLoopbackRerouteInputPackets: No connection found for packet dst=%s src=%s proto=%s",
@@ -326,10 +329,13 @@ func (core *RawSocketCore) handleLoopbackRerouteOutputPackets() {
 }
 
 func (core *RawSocketCore) Close() error {
+	core.mu.Lock()
 	if core.isClosed {
+		core.mu.Unlock()
 		return nil
 	}
 	core.isClosed = true
+	core.mu.Unlock()
 
 	var pcapSessions []*pcapSession
 	core.mu.Lock()
