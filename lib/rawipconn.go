@@ -46,7 +46,7 @@ func NewRawIPConn(params *RawIPConnParams, config *RawIPConnConfig) (*RawIPConn,
 	conn := &RawIPConn{
 		params:    params,
 		config:    config,
-		inputChan: make(chan *gopacket.Packet),
+		inputChan: make(chan *gopacket.Packet, 64), // buffer size of 64 packets
 		//tcpSignalChan: make(chan *gopacket.Packet),
 		mu: sync.Mutex{},
 	}
