@@ -31,6 +31,7 @@ func getRemoteMAC(iface *net.Interface, ip net.IP, arpRequestTimeout time.Durati
 
 	// Set up a channel to receive ARP replies
 	arpReplies := make(chan net.HardwareAddr, 1)
+	defer close(arpReplies)
 
 	// Start a goroutine to read ARP replies
 	go func() {
@@ -55,7 +56,6 @@ func getRemoteMAC(iface *net.Interface, ip net.IP, arpRequestTimeout time.Durati
 // readARP watches a handle for incoming ARP responses and sends the MAC address to the provided channel.
 func readARP(handle *pcap.Handle, iface *net.Interface, targetIP net.IP, arpReplies chan<- net.HardwareAddr) {
 	log.Println("Reading ARP replies...")
-	defer close(arpReplies)
 
 	src := gopacket.NewPacketSource(handle, layers.LayerTypeEthernet)
 	in := src.Packets()
