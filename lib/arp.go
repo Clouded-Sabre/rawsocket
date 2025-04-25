@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sync"
 	"time"
 
 	"github.com/google/gopacket"
@@ -31,11 +32,21 @@ func getRemoteMAC(iface *net.Interface, ip net.IP, arpRequestTimeout time.Durati
 
 	// Set up a channel to receive ARP replies
 	arpReplies := make(chan net.HardwareAddr, 1)
-	defer close(arpReplies)
+
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	// Ensure proper cleanup order
+	defer func() {
+		close(done) // Signal readARP to stop
+		wg.Wait()   // Wait for readARP to finish
+		close(arpReplies)
+	}()
 
 	// Start a goroutine to read ARP replies
 	go func() {
-		readARP(handle, iface, ip, arpReplies)
+		readARP(handle, iface, ip, arpReplies, done, &wg)
 	}()
 
 	// Send ARP request
@@ -54,13 +65,49 @@ func getRemoteMAC(iface *net.Interface, ip net.IP, arpRequestTimeout time.Durati
 }
 
 // readARP watches a handle for incoming ARP responses and sends the MAC address to the provided channel.
-func readARP(handle *pcap.Handle, iface *net.Interface, targetIP net.IP, arpReplies chan<- net.HardwareAddr) {
+func readARP(handle *pcap.Handle, iface *net.Interface, targetIP net.IP, arpReplies chan<- net.HardwareAddr, done chan struct{}, wg *sync.WaitGroup) {
+	defer wg.Done()
+
 	log.Println("Reading ARP replies...")
 
 	src := gopacket.NewPacketSource(handle, layers.LayerTypeEthernet)
 	in := src.Packets()
 
-	for packet := range in {
+	for {
+		select {
+		case <-done:
+			log.Println("readARP: received stop signal")
+			return
+		case packet, ok := <-in:
+			if !ok {
+				log.Println("readARP: packet source closed")
+				return
+			}
+
+			arpLayer := packet.Layer(layers.LayerTypeARP)
+			if arpLayer == nil {
+				log.Println("No ARP layer found in packet")
+				continue
+			}
+
+			arp := arpLayer.(*layers.ARP)
+			log.Println("ARP layer detected")
+			log.Printf("ARP packet: Operation=%v, SourceProtAddress=%v, SourceHwAddress=%v",
+				arp.Operation, net.IP(arp.SourceProtAddress), net.HardwareAddr(arp.SourceHwAddress))
+
+			if arp.Operation != layers.ARPReply || bytes.Equal([]byte(iface.HardwareAddr), arp.SourceHwAddress) {
+				continue
+			}
+
+			if net.IP(arp.SourceProtAddress).Equal(targetIP) {
+				arpReplies <- net.HardwareAddr(arp.SourceHwAddress)
+				log.Println("ARP reply sent to channel")
+				return
+			}
+		}
+	}
+
+	/*for packet := range in {
 		log.Printf("Captured packet: %v", packet)
 		arpLayer := packet.Layer(layers.LayerTypeARP)
 		if arpLayer == nil {
@@ -81,7 +128,7 @@ func readARP(handle *pcap.Handle, iface *net.Interface, targetIP net.IP, arpRepl
 			log.Println("ARP reply sent to channel")
 			return
 		}
-	}
+	}*/
 }
 
 // writeARP writes an ARP request for the target IP to the pcap handle.
