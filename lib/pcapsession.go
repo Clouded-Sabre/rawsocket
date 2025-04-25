@@ -261,6 +261,9 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 		}
 
 		conn.inputChan <- &newIpPacket
+
+		log.Printf("processIncomingPacket: Time taken: %v\n", time.Since(startTime))
+
 		return
 	}
 
@@ -283,8 +286,6 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 	if Debug {
 		log.Println("No RawIPConn found for key:", key)
 	}
-
-	log.Printf("processIncomingPacket: Time taken: %v\n", time.Since(startTime))
 }
 
 func (ps *pcapSession) handleOutgoingPackets() {
