@@ -58,12 +58,24 @@ func NewRawIPConn(params *RawIPConnParams, config *RawIPConnConfig) (*RawIPConn,
 func (conn *RawIPConn) Read(buffer []byte) (int, error) {
 	startTime := time.Now() // Start timing
 
+	// Log buffer status
+	log.Printf("Read: inputChan length: %d, capacity: %d", len(conn.inputChan), cap(conn.inputChan))
+
 	var (
 		packet *gopacket.Packet
 		ok     bool
 	)
 
-	// Only lock when accessing shared state
+	// Time the channel read operation
+	chanReadStart := time.Now()
+
+	// Simplified blocking read for diagnosis (no deadline handling)
+	packet, ok = <-conn.inputChan
+	if !ok {
+		return 0, fmt.Errorf("connection closed")
+	}
+
+	/*// Only lock when accessing shared state
 	conn.mu.Lock()
 	deadline := conn.readDeadline
 	conn.mu.Unlock()
@@ -91,7 +103,7 @@ func (conn *RawIPConn) Read(buffer []byte) (int, error) {
 		if !ok {
 			return 0, fmt.Errorf("connection closed")
 		}
-	}
+	}*/
 
 	log.Printf("chanRead: Time taken: %v\n", time.Since(chanReadStart))
 
@@ -103,6 +115,10 @@ func (conn *RawIPConn) Read(buffer []byte) (int, error) {
 
 	// Get the raw packet data
 	rawData := pkt.Data()
+	if len(buffer) < len(rawData) {
+		log.Printf("Read: Buffer too small: %d bytes, need %d bytes", len(buffer), len(rawData))
+		return 0, fmt.Errorf("buffer too small")
+	}
 	copy(buffer, rawData)
 
 	log.Printf("Read: Packet processing took: %v", time.Since(processStart))
