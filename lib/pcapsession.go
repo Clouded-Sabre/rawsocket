@@ -285,6 +285,7 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 		return
 	}
 
+	log.Printf("pcapSession.processIncomingPacket(%s): No RawIPConn found for key: %s\n", ps.params.iface.Name, key)
 	if Debug {
 		log.Println("No RawIPConn found for key:", key)
 	}
