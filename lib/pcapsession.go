@@ -192,6 +192,7 @@ func (ps *pcapSession) handleIncomingPackets() {
 
 // processPacket processes an incoming packet and forwards it to the appropriate RawIPConn
 func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
+	log.Println("pcapSession.processIncomingPacket: start processing packet.")
 	startTime := time.Now() // Start timing
 
 	// Extract the IPv4 layer
