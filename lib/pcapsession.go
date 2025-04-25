@@ -192,6 +192,10 @@ func (ps *pcapSession) handleIncomingPackets() {
 
 // processPacket processes an incoming packet and forwards it to the appropriate RawIPConn
 func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
+	globalDebug := Debug
+	Debug = true                           // Enable debug logging for this function
+	defer func() { Debug = globalDebug }() // Restore original debug state
+
 	log.Printf("pcapSession.processIncomingPacket(%s): start processing packet.\n", ps.params.iface.Name)
 	startTime := time.Now() // Start timing
 
@@ -199,7 +203,7 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 	ipLayer := (*packet).Layer(layers.LayerTypeIPv4)
 	if ipLayer == nil {
 		if Debug {
-			log.Println("Not an IPv4 packet")
+			log.Printf("pcapSession.processIncomingPacket(%s): Not an IPv4 packet\n", ps.params.iface.Name)
 		}
 		return
 	}
@@ -207,7 +211,7 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 	ipv4, ok := ipLayer.(*layers.IPv4)
 	if !ok {
 		if Debug {
-			log.Println("Failed to parse IPv4 layer")
+			log.Printf("pcapSession.processIncomingPacket(%s): Failed to parse IPv4 layer\n", ps.params.iface.Name)
 		}
 		return
 	}
@@ -221,7 +225,7 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 	)
 	if err != nil {
 		if Debug {
-			log.Println("Failed to serialize IPv4 packet:", err)
+			log.Printf("pcapSession.processIncomingPacket(%s): Failed to serialize IPv4 packet: %s\n", ps.params.iface.Name, err)
 		}
 		return
 	}
@@ -231,7 +235,7 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 	// Some OSes send packets of internal communication via loopback interface even if the destination is a local non-loopback IP
 	if ps.isLoopback && !ipv4.DstIP.IsLoopback() {
 		if Debug {
-			log.Printf("Loopback interface: forwarding non-loopback packet (dst: %s) to reroute channel", ipv4.DstIP)
+			log.Printf("pcapSession.processIncomingPacket(%s): reroute non-loopback packet (dst: %s) to loopback pcapSession\n", ps.params.iface.Name, ipv4.DstIP)
 		}
 		ps.params.loopbackRerouteInputChan <- &newIpPacket
 		return
@@ -241,30 +245,30 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 	protocol := ipv4.Protocol
 
 	// Debugging: Print all client connections in rawIPConnMap
-	if Debug {
+	/*if Debug {
 		fmt.Println("Debug: Listing all client connections in ps.rawIPConnMap:")
 		ps.rawIPConnMap.Range(func(key, value interface{}) bool {
 			fmt.Printf("Client connection key: %s\n", key)
 			return true // continue iterating
 		})
-	}
+	}*/
 
 	// Construct the client connection key for RawIPConn lookup
 	key := ipv4.DstIP.String() + ":" + ipv4.SrcIP.String() + ":" + protocol.String()
 	if Debug {
-		log.Println("pcapSession:processIncomingPacket: Client key is", key)
+		log.Printf("pcapSession.processIncomingPacket(%s): Client key is %s\n", ps.params.iface.Name, key)
 	}
 	value, exists := ps.rawIPConnMap.Load(key)
 	if exists {
 		conn := value.(*RawIPConn)
 		if Debug {
-			fmt.Printf("pcapSession->processIncomingPacket: Forwarding IP packet to client inputChan of %s\n", key)
+			fmt.Printf("pcapSession.processIncomingPacket(%s): Forwarding IP packet to client inputChan of %s\n", ps.params.iface.Name, key)
 		}
 
 		log.Printf("pcapSession.processIncomingPacket(%s): sending packet to rawIpConn's inputChan.\n", ps.params.iface.Name)
 		conn.inputChan <- &newIpPacket
 
-		log.Printf("processIncomingPacket: Time taken: %v\n", time.Since(startTime))
+		log.Printf("pcapSession.processIncomingPacket(%s): Time taken: %v\n", ps.params.iface.Name, time.Since(startTime))
 
 		return
 	}
@@ -278,16 +282,15 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 	if exists {
 		conn := value.(*RawIPConn)
 		if Debug {
-			fmt.Printf("pcapSession->processIncomingPacket: Forwarding IP packet to server inputChan of %s\n", key)
+			fmt.Printf("pcapSession.processIncomingPacket(%s): Forwarding IP packet to server inputChan of %s\n", ps.params.iface.Name, key)
 		}
 
 		conn.inputChan <- &newIpPacket
 		return
 	}
 
-	log.Printf("pcapSession.processIncomingPacket(%s): No RawIPConn found for key: %s\n", ps.params.iface.Name, key)
 	if Debug {
-		log.Println("No RawIPConn found for key:", key)
+		log.Printf("pcapSession.processIncomingPacket(%s): No RawIPConn found for key: %s\n", ps.params.iface.Name, key)
 	}
 }
 
