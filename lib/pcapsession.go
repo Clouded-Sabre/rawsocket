@@ -261,6 +261,7 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 			fmt.Printf("pcapSession->processIncomingPacket: Forwarding IP packet to client inputChan of %s\n", key)
 		}
 
+		log.Printf("pcapSession.processIncomingPacket(%s): sending packet to rawIpConn's inputChan.\n", ps.params.iface.Name)
 		conn.inputChan <- &newIpPacket
 
 		log.Printf("processIncomingPacket: Time taken: %v\n", time.Since(startTime))
