@@ -45,23 +45,41 @@ type pcapSession struct {
 
 // NewPcapSession creates a new NewPcapSession with a global ARP cache
 func newPcapSession(params *pcapSessionParams, config *pcapSessionConfig) (*pcapSession, error) {
-	handle, err := pcap.OpenLive(
-		getPcapDeviceName(params.iface),
-		65536, // snapshot length
-		false, // non-promiscuous mode
-		pcap.BlockForever,
-	)
+	// 1) Create an inactive handle so we can tune before activation
+	inactive, err := pcap.NewInactiveHandle(getPcapDeviceName(params.iface))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("pcap NewInactiveHandle: %w", err)
+	}
+	defer inactive.CleanUp()
+
+	// 2) Tune the kernel buffer to 256 KiB (smaller = faster hand-off)
+	if err := inactive.SetBufferSize(256 * 1024); err != nil {
+		return nil, fmt.Errorf("SetBufferSize: %w", err)
 	}
 
-	// Set BPF filter to capture IP and ARP packets
-	bpfFilter := "ip or arp"
-	if err := handle.SetBPFFilter(bpfFilter); err != nil {
+	// 3) Enable immediate mode → deliver packets as soon as they arrive, no batching
+	if err := inactive.SetImmediateMode(true); err != nil {
+		return nil, fmt.Errorf("SetImmediateMode: %w", err)
+	}
+
+	// 4) Minimal read timeout (1 ms) to guard against any residual buffering
+	if err := inactive.SetTimeout(time.Millisecond); err != nil {
+		return nil, fmt.Errorf("SetTimeout: %w", err)
+	}
+
+	// 5) Now activate the handle with all settings applied
+	handle, err := inactive.Activate()
+	if err != nil {
+		return nil, fmt.Errorf("activate: %w", err)
+	}
+
+	// 6) Apply your BPF filter (IP + ARP)
+	if err := handle.SetBPFFilter("ip or arp"); err != nil {
 		handle.Close()
-		return nil, fmt.Errorf("failed to set BPF filter '%s': %w", bpfFilter, err)
+		return nil, fmt.Errorf("SetBPFFilter: %w", err)
 	}
 
+	// 7) Build the session
 	session := &pcapSession{
 		config:             config,
 		params:             params,
