@@ -382,6 +382,7 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 }
 
 func (ps *pcapSession) handleOutgoingPackets() {
+	Debug := true // Enable debug logging for this function
 	defer ps.wg.Done()
 
 	for {
@@ -389,6 +390,11 @@ func (ps *pcapSession) handleOutgoingPackets() {
 		case <-ps.stopChan:
 			return
 		case pkt := <-ps.outgoingPackets:
+			startTime := time.Now()
+			if Debug {
+				log.Printf("handleOutgoingPackets: outgoingPackets channel length: %d/%d",
+					len(ps.outgoingPackets), cap(ps.outgoingPackets))
+			}
 			var buffer gopacket.SerializeBuffer
 			var err error
 			options := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
@@ -453,6 +459,10 @@ func (ps *pcapSession) handleOutgoingPackets() {
 
 			if err != nil {
 				log.Printf("Error writing packet: %v", err)
+			}
+
+			if Debug {
+				log.Printf("handleOutgoingPackets: Packet sent, time taken: %v", time.Since(startTime))
 			}
 		}
 	}
