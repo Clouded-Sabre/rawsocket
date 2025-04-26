@@ -4,12 +4,10 @@
 package lib
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"log"
 	"net"
-	"sync"
 	"time"
 
 	"github.com/google/gopacket"
@@ -18,121 +16,42 @@ import (
 )
 
 // getRemoteMAC sends an ARP request to get the MAC address for a given IP and interface
-func getRemoteMAC(iface *net.Interface, ip net.IP, arpRequestTimeout time.Duration, arpCache *ARPCache, handle *pcap.Handle) (net.HardwareAddr, error) {
-	log.Printf("Getting remote MAC address for ip %s...\n", ip)
+func getRemoteMAC(iface *net.Interface, ip net.IP, arpRequestTimeout time.Duration, arpCache *ARPCache, ps *pcapSession) (net.HardwareAddr, error) {
+	log.Printf("getRemoteMAC: Getting remote MAC address for ip %s...\n", ip)
 	// Check ARP cache first
 	if mac, found := arpCache.Lookup(ip.String()); found {
 		return mac, nil
 	}
 
-	// Use provided pcap handle
-	if handle == nil {
-		return nil, fmt.Errorf("nil pcap handle provided")
-	}
-
-	// Set up a channel to receive ARP replies
-	arpReplies := make(chan net.HardwareAddr, 1)
-
-	done := make(chan struct{})
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	// Ensure proper cleanup order
-	defer func() {
-		close(done) // Signal readARP to stop
-		wg.Wait()   // Wait for readARP to finish
-		close(arpReplies)
-	}()
-
-	// Start a goroutine to read ARP replies
-	go func() {
-		readARP(handle, iface, ip, arpReplies, done, &wg)
-	}()
-
 	// Send ARP request
-	if err := writeARP(handle, iface, ip); err != nil {
-		return nil, fmt.Errorf("failed to send ARP request: %w", err)
+	if err := writeARP(ps, iface, ip); err != nil {
+		return nil, fmt.Errorf("getRemoteMAC: failed to send ARP request: %w", err)
 	}
+
+	// Periodically check ARP cache for result
+	ticker := time.NewTicker(50 * time.Millisecond) // Check every 50ms
+	defer ticker.Stop()
+
+	timeout := time.After(arpRequestTimeout)
 
 	// Wait for ARP reply or timeout
-	select {
-	case mac := <-arpReplies:
-		arpCache.Add(ip.String(), mac) // Cache the result
-		return mac, nil
-	case <-time.After(arpRequestTimeout):
-		return nil, fmt.Errorf("timeout waiting for ARP reply for IP %s", ip)
-	}
-}
-
-// readARP watches a handle for incoming ARP responses and sends the MAC address to the provided channel.
-func readARP(handle *pcap.Handle, iface *net.Interface, targetIP net.IP, arpReplies chan<- net.HardwareAddr, done chan struct{}, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	log.Println("Reading ARP replies...")
-
-	src := gopacket.NewPacketSource(handle, layers.LayerTypeEthernet)
-	in := src.Packets()
-
 	for {
 		select {
-		case <-done:
-			log.Println("readARP: received stop signal")
-			return
-		case packet, ok := <-in:
-			if !ok {
-				log.Println("readARP: packet source closed")
-				return
+		case <-ticker.C:
+			if mac, found := arpCache.Lookup(ip.String()); found {
+				if Debug {
+					log.Printf("getRemoteMAC: Found MAC address in cache for IP %s: %s", ip, mac)
+				}
+				return mac, nil
 			}
-
-			arpLayer := packet.Layer(layers.LayerTypeARP)
-			if arpLayer == nil {
-				log.Println("No ARP layer found in packet")
-				continue
-			}
-
-			arp := arpLayer.(*layers.ARP)
-			log.Println("ARP layer detected")
-			log.Printf("ARP packet: Operation=%v, SourceProtAddress=%v, SourceHwAddress=%v",
-				arp.Operation, net.IP(arp.SourceProtAddress), net.HardwareAddr(arp.SourceHwAddress))
-
-			if arp.Operation != layers.ARPReply || bytes.Equal([]byte(iface.HardwareAddr), arp.SourceHwAddress) {
-				continue
-			}
-
-			if net.IP(arp.SourceProtAddress).Equal(targetIP) {
-				arpReplies <- net.HardwareAddr(arp.SourceHwAddress)
-				log.Println("ARP reply sent to channel")
-				return
-			}
+		case <-timeout:
+			return nil, fmt.Errorf("getRemoteMAC: timeout waiting for ARP reply for IP %s", ip)
 		}
 	}
-
-	/*for packet := range in {
-		log.Printf("Captured packet: %v", packet)
-		arpLayer := packet.Layer(layers.LayerTypeARP)
-		if arpLayer == nil {
-			log.Println("No ARP layer found in packet")
-			continue
-		} else {
-			arp := arpLayer.(*layers.ARP)
-			log.Printf("ARP packet: Operation=%v, SourceProtAddress=%v, SourceHwAddress=%v",
-				arp.Operation, net.IP(arp.SourceProtAddress), net.HardwareAddr(arp.SourceHwAddress))
-		}
-		log.Println("ARP layer detected")
-		arp := arpLayer.(*layers.ARP)
-		if arp.Operation != layers.ARPReply || bytes.Equal([]byte(iface.HardwareAddr), arp.SourceHwAddress) {
-			continue
-		}
-		if net.IP(arp.SourceProtAddress).Equal(targetIP) {
-			arpReplies <- net.HardwareAddr(arp.SourceHwAddress)
-			log.Println("ARP reply sent to channel")
-			return
-		}
-	}*/
 }
 
 // writeARP writes an ARP request for the target IP to the pcap handle.
-func writeARP(handle *pcap.Handle, iface *net.Interface, targetIP net.IP) error {
+func writeARP(ps *pcapSession, iface *net.Interface, targetIP net.IP) error {
 	// Get the interface IP address
 	if Debug {
 		log.Printf("iface name is: %s     target IP: %s", iface.Name, targetIP)
@@ -189,10 +108,16 @@ func writeARP(handle *pcap.Handle, iface *net.Interface, targetIP net.IP) error 
 		return err
 	}
 
+	ps.writeMu.Lock()
+	err := ps.handle.WritePacketData(buf.Bytes())
+	ps.writeMu.Unlock()
+	if err != nil {
+		return fmt.Errorf("failed to write ARP packet: %w", err)
+	}
 	if Debug {
 		log.Println("ARP request sent successfully")
 	}
-	return handle.WritePacketData(buf.Bytes())
+	return nil
 }
 
 // getPcapDeviceName gets the appropriate pcap device name for the interface

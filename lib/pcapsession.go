@@ -22,7 +22,6 @@ type pcapSessionConfig struct {
 type pcapSessionParams struct {
 	key                       string
 	iface                     *net.Interface
-	handle                    *pcap.Handle
 	loopbackRerouteInputChan  chan *gopacket.Packet // Channel for for sending packets to rawsocketCore for loopback rerouting
 	loopbackRerouteOutputChan chan *gopacket.Packet
 	pcapSessionCloseSig       chan *pcapSession
@@ -30,11 +29,13 @@ type pcapSessionParams struct {
 }
 
 type pcapSession struct {
-	config *pcapSessionConfig
-	params *pcapSessionParams
-	//mu                 sync.Mutex
+	config             *pcapSessionConfig
+	params             *pcapSessionParams
+	handle             *pcap.Handle
+	writeMu            sync.Mutex // Protect concurrent writes to pcap handle
 	rawIPConnMap       sync.Map
 	outgoingPackets    chan *gopacket.Packet // Channel for outgoing packets
+	inArpPackets       chan *gopacket.Packet // Channel for ARP packets for handleArpReplies
 	rawIPConnCloseChan chan *RawIPConn
 	isLoopback         bool // true if the iface is a loopback interface
 	stopChan           chan struct{}
@@ -54,8 +55,6 @@ func newPcapSession(params *pcapSessionParams, config *pcapSessionConfig) (*pcap
 		return nil, err
 	}
 
-	params.handle = handle
-
 	// Set BPF filter to capture IP and ARP packets
 	bpfFilter := "ip or arp"
 	if err := handle.SetBPFFilter(bpfFilter); err != nil {
@@ -64,10 +63,11 @@ func newPcapSession(params *pcapSessionParams, config *pcapSessionConfig) (*pcap
 	}
 
 	session := &pcapSession{
-		config: config,
-		params: params,
-		//rawIPConnMap:       make(map[string]*RawIPConn),
+		config:             config,
+		params:             params,
+		handle:             handle,
 		outgoingPackets:    make(chan *gopacket.Packet, 100),
+		inArpPackets:       make(chan *gopacket.Packet, 20),
 		rawIPConnCloseChan: make(chan *RawIPConn),
 		stopChan:           make(chan struct{}),
 		wg:                 sync.WaitGroup{},
@@ -84,14 +84,58 @@ func newPcapSession(params *pcapSessionParams, config *pcapSessionConfig) (*pcap
 	session.wg.Add(1)
 	go session.handleRawIPConnClose()
 
+	session.wg.Add(1)
+	go session.handleArpReplies()
+
 	return session, nil
+}
+
+func (ps *pcapSession) handleArpReplies() {
+	defer ps.wg.Done()
+
+	for {
+		select {
+		case <-ps.stopChan:
+			log.Println("pcapSession.handleArpReplies: received stop signal. Exiting...")
+			return
+		case packet, ok := <-ps.inArpPackets:
+			if !ok {
+				log.Println("pcapSession.handleArpReplies: inArpPackets channel closed. Exiting...")
+				return
+			}
+
+			arpLayer := (*packet).Layer(layers.LayerTypeARP)
+			if arpLayer == nil {
+				if Debug {
+					log.Println("pcapSession.handleArpReplies: No ARP layer found in packet")
+				}
+				continue
+			}
+
+			arp := arpLayer.(*layers.ARP)
+			if arp.Operation != layers.ARPReply {
+				if Debug {
+					log.Printf("pcapSession.handleArpReplies: Not an ARP reply (Operation: %d)", arp.Operation)
+				}
+				continue
+			}
+
+			// Update ARP cache
+			srcIP := net.IP(arp.SourceProtAddress).String()
+			srcMAC := net.HardwareAddr(arp.SourceHwAddress)
+
+			if Debug {
+				log.Printf("handleArpReplies: Caching ARP reply from IP %s -> MAC %s",
+					srcIP, srcMAC)
+			}
+
+			ps.params.arpCache.Add(srcIP, srcMAC)
+		}
+	}
 }
 
 // DialIP creates or retrieves a RawIPConn based on the given parameters
 func (ps *pcapSession) dialIP(srcIP, dstIP net.IP, protocol layers.IPProtocol) (*RawIPConn, error) {
-	//ps.mu.Lock()
-	//defer ps.mu.Unlock()
-
 	// construct RawIPConn key and lookup to see if it already exists
 	key := srcIP.To4().String() + ":" + dstIP.To4().String() + ":" + protocolToString(protocol)
 	if Debug {
@@ -111,7 +155,7 @@ func (ps *pcapSession) dialIP(srcIP, dstIP net.IP, protocol layers.IPProtocol) (
 		isServer:           false,
 		key:                key,
 		pcapIface:          ps.params.iface,
-		handle:             ps.params.handle,
+		handle:             ps.handle,
 		outputChan:         ps.outgoingPackets,
 		rawIPConnCloseChan: ps.rawIPConnCloseChan,
 	}
@@ -161,7 +205,7 @@ func (ps *pcapSession) listenIP(ip net.IP, protocol layers.IPProtocol) (*RawIPCo
 		isServer:           true,
 		key:                connKey,
 		pcapIface:          ps.params.iface,
-		handle:             ps.params.handle,
+		handle:             ps.handle,
 		outputChan:         ps.outgoingPackets,
 		rawIPConnCloseChan: ps.rawIPConnCloseChan,
 	}
@@ -186,9 +230,9 @@ func (ps *pcapSession) handleIncomingPackets() {
 		decoder = layers.LayerTypeEthernet
 	}
 
-	src := gopacket.NewPacketSource(ps.params.handle, decoder)
+	src := gopacket.NewPacketSource(ps.handle, decoder)
 	in := src.Packets()
-	defer ps.params.handle.Close()
+	defer ps.handle.Close()
 	for {
 		select {
 		case <-ps.stopChan:
@@ -212,7 +256,16 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 	log.Printf("pcapSession.processIncomingPacket(%s): start processing packet.\n", ps.params.iface.Name)
 	startTime := time.Now() // Start timing
 
-	// Extract the IPv4 layer
+	// Check for ARP packets first
+	if arpLayer := (*packet).Layer(layers.LayerTypeARP); arpLayer != nil {
+		if Debug {
+			log.Printf("pcapSession.processIncomingPacket(%s): Forwarding ARP packet to handler\n", ps.params.iface.Name)
+		}
+		ps.inArpPackets <- packet
+		return
+	}
+
+	// Continue with IPv4 processing
 	ipLayer := (*packet).Layer(layers.LayerTypeIPv4)
 	if ipLayer == nil {
 		if Debug {
@@ -352,7 +405,7 @@ func (ps *pcapSession) handleOutgoingPackets() {
 				if gatewayIP != nil {
 					nextHopIp = gatewayIP
 				}
-				dstMAC, err := getRemoteMAC(ps.params.iface, nextHopIp, ps.config.arpRequestTimeout, ps.params.arpCache, ps.params.handle)
+				dstMAC, err := getRemoteMAC(ps.params.iface, nextHopIp, ps.config.arpRequestTimeout, ps.params.arpCache, ps)
 				if err != nil {
 					log.Println("pcapSession.handleOutgoingPackets: failed to retrieve remote mac address:", err)
 					continue
@@ -373,8 +426,12 @@ func (ps *pcapSession) handleOutgoingPackets() {
 				}
 			}
 
-			if err := ps.params.handle.WritePacketData(buffer.Bytes()); err != nil {
-				log.Println("Error writing packet:", err)
+			ps.writeMu.Lock()
+			err = ps.handle.WritePacketData(buffer.Bytes())
+			ps.writeMu.Unlock()
+
+			if err != nil {
+				log.Printf("Error writing packet: %v", err)
 			}
 		}
 	}
@@ -414,22 +471,30 @@ func (ps *pcapSession) close() {
 	}
 	ps.isClosed = true
 
+	// First collect all RawIPConns to close
 	var ipConns []*RawIPConn
 	ps.rawIPConnMap.Range(func(key, value interface{}) bool {
 		ipConns = append(ipConns, value.(*RawIPConn))
 		return true // continue iteration
 	})
 
+	// Close all RawIPConns
 	for _, ipConn := range ipConns {
 		ipConn.Close()
 	}
 
+	// Signal all goroutines to stop
 	close(ps.stopChan)
 
+	// Wait for all goroutines to finish
 	ps.wg.Wait()
 
+	// Close all channels
 	close(ps.outgoingPackets)
-	ps.params.handle.Close()
+	close(ps.inArpPackets)
+
+	// Close the pcap handle
+	ps.handle.Close()
 
 	log.Printf("Pcap Session %s closed", ps.params.key)
 }
