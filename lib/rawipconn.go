@@ -56,7 +56,7 @@ func NewRawIPConn(params *RawIPConnParams, config *RawIPConnConfig) (*RawIPConn,
 
 // Read reads data from the RawIPConn.
 func (conn *RawIPConn) Read(buffer []byte) (int, error) {
-	Debug := true // Enable debug logging for this function
+	//Debug := true // Enable debug logging for this function
 
 	startTime := time.Now() // Start timing
 

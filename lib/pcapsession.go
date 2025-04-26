@@ -453,6 +453,11 @@ func (ps *pcapSession) handleOutgoingPackets() {
 				}
 			}
 
+			if Debug {
+				log.Printf("handleOutgoingPackets: Packet preparation ready, time taken: %v", time.Since(startTime))
+				startTime = time.Now()
+			}
+
 			ps.writeMu.Lock()
 			err = ps.handle.WritePacketData(buffer.Bytes())
 			ps.writeMu.Unlock()
