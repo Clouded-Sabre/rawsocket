@@ -408,11 +408,6 @@ func (ps *pcapSession) handleOutgoingPackets() {
 			ipv4, _ := ipLayer.(*layers.IPv4)
 			destIP := ipv4.DstIP
 
-			if Debug {
-				log.Printf("handleOutgoingPackets: Packet preparation middle, time taken: %v", time.Since(startTime))
-				startTime = time.Now()
-			}
-
 			if ps.isLoopback {
 				buffer = gopacket.NewSerializeBuffer()
 				err = serializeLoopbackPacket(buffer, options, (*pkt).Data())
@@ -441,6 +436,11 @@ func (ps *pcapSession) handleOutgoingPackets() {
 				if err != nil {
 					log.Println("pcapSession.handleOutgoingPackets: failed to retrieve remote mac address:", err)
 					continue
+				}
+
+				if Debug {
+					log.Printf("handleOutgoingPackets: Packet preparation middle, time taken: %v", time.Since(startTime))
+					startTime = time.Now()
 				}
 
 				buffer = gopacket.NewSerializeBuffer()
