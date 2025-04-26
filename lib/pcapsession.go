@@ -23,7 +23,7 @@ type pcapSessionParams struct {
 	key                       string
 	iface                     *net.Interface
 	loopbackRerouteInputChan  chan *gopacket.Packet // Channel for for sending packets to rawsocketCore for loopback rerouting
-	loopbackRerouteOutputChan chan *gopacket.Packet
+	loopbackRerouteOutputChan chan *outPacket
 	pcapSessionCloseSig       chan *pcapSession
 	arpCache                  *ARPCache
 }
@@ -32,9 +32,9 @@ type pcapSession struct {
 	config             *pcapSessionConfig
 	params             *pcapSessionParams
 	handle             *pcap.Handle
-	writeMu            sync.Mutex // Protect concurrent writes to pcap handle
-	rawIPConnMap       sync.Map
-	outgoingPackets    chan *gopacket.Packet // Channel for outgoing packets
+	writeMu            sync.Mutex            // Protect concurrent writes to pcap handle
+	rawIPConnMap       sync.Map              // Map of raw IP connections, key is the connection key (srcIP:dstIP:protocol), for client
+	outgoingPackets    chan *outPacket       // Channel for outgoing packets
 	inArpPackets       chan *gopacket.Packet // Channel for ARP packets for handleArpReplies
 	rawIPConnCloseChan chan *RawIPConn
 	isLoopback         bool // true if the iface is a loopback interface
@@ -84,7 +84,7 @@ func newPcapSession(params *pcapSessionParams, config *pcapSessionConfig) (*pcap
 		config:             config,
 		params:             params,
 		handle:             handle,
-		outgoingPackets:    make(chan *gopacket.Packet, 100),
+		outgoingPackets:    make(chan *outPacket, 100),
 		inArpPackets:       make(chan *gopacket.Packet, 20),
 		rawIPConnCloseChan: make(chan *RawIPConn),
 		stopChan:           make(chan struct{}),
@@ -181,6 +181,14 @@ func (ps *pcapSession) dialIP(srcIP, dstIP net.IP, protocol layers.IPProtocol) (
 	if err != nil {
 		log.Fatalln("Error dialing raw IPConn:", err)
 	}
+
+	conn.remoteIpIsLocal = isLocalIP(dstIP) // Check if the remote IP is local
+	_, _, gatewayIP, _ := GetLocalIP(dstIP)
+	var nextHopIp = dstIP
+	if gatewayIP != nil {
+		nextHopIp = gatewayIP
+	}
+	conn.nextHopIP = nextHopIp // Set the next hop IP address for the route to the remote IP
 
 	// Add to map
 	ps.rawIPConnMap.Store(key, conn)
@@ -381,8 +389,9 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 	}
 }
 
+// the logic here only covers client side at the moment
 func (ps *pcapSession) handleOutgoingPackets() {
-	Debug := true // Enable debug logging for this function
+	//Debug := true // Enable debug logging for this function
 	defer ps.wg.Done()
 
 	for {
@@ -390,7 +399,7 @@ func (ps *pcapSession) handleOutgoingPackets() {
 		case <-ps.stopChan:
 			return
 		case pkt := <-ps.outgoingPackets:
-
+			startTime := time.Now()
 			if Debug {
 				log.Printf("handleOutgoingPackets: outgoingPackets channel length: %d/%d",
 					len(ps.outgoingPackets), cap(ps.outgoingPackets))
@@ -399,26 +408,24 @@ func (ps *pcapSession) handleOutgoingPackets() {
 			var err error
 			options := gopacket.SerializeOptions{FixLengths: true, ComputeChecksums: true}
 
-			ipLayer := (*pkt).Layer(layers.LayerTypeIPv4)
+			ipLayer := (*pkt.packet).Layer(layers.LayerTypeIPv4)
 			if ipLayer == nil {
 				log.Println("pcapSession.handleOutgoingPackets: packet does not contain an IPv4 layer")
 				continue
 			}
 
 			ipv4, _ := ipLayer.(*layers.IPv4)
-			destIP := ipv4.DstIP
 
 			if ps.isLoopback {
 				buffer = gopacket.NewSerializeBuffer()
-				err = serializeLoopbackPacket(buffer, options, (*pkt).Data())
+				err = serializeLoopbackPacket(buffer, options, (*pkt.packet).Data())
 				if err != nil {
 					log.Println("Error serializing loopback packet:", err)
 					continue
 				}
 			} else {
-				srcIsLocal := isLocalIP(ipv4.SrcIP)
-				dstIsLocal := isLocalIP(ipv4.DstIP)
-				if srcIsLocal && dstIsLocal {
+				dstIsLocal := pkt.conn.remoteIpIsLocal
+				if dstIsLocal {
 					if Debug {
 						log.Printf("Non-loopback interface: forwarding local packet (src: %s, dst: %s) to reroute channel",
 							ipv4.SrcIP, ipv4.DstIP)
@@ -427,27 +434,16 @@ func (ps *pcapSession) handleOutgoingPackets() {
 					continue
 				}
 
-				startTime := time.Now()
-
-				_, _, gatewayIP, _ := GetLocalIP(destIP)
-				var nextHopIp = destIP
-				if gatewayIP != nil {
-					nextHopIp = gatewayIP
-				}
+				nextHopIp := pkt.conn.nextHopIP
 
 				if Debug {
 					log.Printf("handleOutgoingPackets: Packet preparation middle, time taken: %v", time.Since(startTime))
-					startTime = time.Now()
 				}
 
 				dstMAC, err := getRemoteMAC(ps.params.iface, nextHopIp, ps.config.arpRequestTimeout, ps.params.arpCache, ps)
 				if err != nil {
 					log.Println("pcapSession.handleOutgoingPackets: failed to retrieve remote mac address:", err)
 					continue
-				}
-
-				if Debug {
-					log.Printf("handleOutgoingPackets: Packet preparation ready, time taken: %v", time.Since(startTime))
 				}
 
 				buffer = gopacket.NewSerializeBuffer()
@@ -458,7 +454,7 @@ func (ps *pcapSession) handleOutgoingPackets() {
 				}
 				err = gopacket.SerializeLayers(buffer, options,
 					ethernetLayer,
-					gopacket.Payload((*pkt).Data()))
+					gopacket.Payload((*pkt.packet).Data()))
 				if err != nil {
 					log.Println("Error serializing ethernet packet:", err)
 					continue

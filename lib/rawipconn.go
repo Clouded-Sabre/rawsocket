@@ -16,27 +16,35 @@ import (
 	"github.com/google/gopacket/pcap"
 )
 
+type outPacket struct {
+	packet *gopacket.Packet
+	conn   *RawIPConn
+}
+
 type RawIPConnParams struct {
 	isServer           bool
 	key                string
 	pcapIface          *net.Interface
 	handle             *pcap.Handle
-	outputChan         chan *gopacket.Packet
+	outputChan         chan *outPacket
 	rawIPConnCloseChan chan *RawIPConn
 }
 
 type RawIPConnConfig struct {
 	localIP  net.IP
-	remoteIP net.IP // only used for client connection
-	protocol layers.IPProtocol
+	remoteIP net.IP            // only used for client side. Server side acts more like UDP listener, so remoteIP is not used.
+	protocol layers.IPProtocol // protocol type (e.g., TCP, UDP, icmp, etc.)
 }
 
 // RawIPConn represents a connection for raw IP packets.
 type RawIPConn struct {
-	params       *RawIPConnParams
-	config       *RawIPConnConfig
-	readDeadline time.Time
-	inputChan    chan *gopacket.Packet
+	params          *RawIPConnParams
+	config          *RawIPConnConfig
+	readDeadline    time.Time
+	inputChan       chan *gopacket.Packet
+	remoteIpIsLocal bool   // if the remote IP is local, loopback interface will be used for sending packets. only used for client side.
+	nextHopIP       net.IP // next hop IP address for the route to the remote IP, used to get ethernet dst mac address. only used for client side.
+
 	//tcpSignalChan chan *gopacket.Packet // to receive TCP signalling packets sniffed by pcapSession. For client side, it's SYN and ACK. For Server, it's SYN-ACK
 	isClosed bool
 	mu       sync.Mutex
@@ -173,13 +181,12 @@ func (conn *RawIPConn) ReadFrom(buffer []byte) (int, net.Addr, error) {
 	if ipLayer := (*packet).Layer(layers.LayerTypeIPv4); ipLayer != nil {
 		ip, _ := ipLayer.(*layers.IPv4)
 		//log.Println("ReadFrom: got ip packet with length", ip.Length)
-		if ip.Protocol == conn.config.protocol {
-			copy(buffer, ip.Payload) // copy the payload to the buffer
-			return len(ip.Payload), &net.IPAddr{IP: ip.SrcIP}, nil
+		copy(buffer, ip.Payload) // copy the payload to the buffer
+		if Debug {
+			log.Printf("RawIPConn.ReadFrom: Time taken: %v\n", time.Since(startTime))
 		}
+		return len(ip.Payload), &net.IPAddr{IP: ip.SrcIP}, nil
 	}
-
-	log.Printf("ReadFrom: Time taken: %v\n", time.Since(startTime))
 
 	return 0, nil, fmt.Errorf("no valid L4 payload found")
 }
@@ -212,7 +219,10 @@ func (conn *RawIPConn) Write(data []byte) (int, error) {
 	packet := gopacket.NewPacket(buffer.Bytes(), layers.LayerTypeIPv4, gopacket.Default)
 
 	// Send the L3 packet to pcapSession's outputChan
-	conn.params.outputChan <- &packet
+	conn.params.outputChan <- &outPacket{
+		packet: &packet,
+		conn:   conn,
+	}
 
 	return len(data), nil
 }
@@ -251,7 +261,10 @@ func (conn *RawIPConn) WriteTo(data []byte, addr net.Addr) (int, error) {
 	packet := gopacket.NewPacket(buffer.Bytes(), layers.LayerTypeIPv4, gopacket.Default)
 
 	// Send the L3 packet to pcapSession's outputChan
-	conn.params.outputChan <- &packet
+	conn.params.outputChan <- &outPacket{
+		packet: &packet,
+		conn:   conn,
+	}
 
 	return len(data), nil
 }

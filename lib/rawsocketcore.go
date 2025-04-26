@@ -18,7 +18,7 @@ type RawSocketCore struct {
 	mu                        sync.RWMutex
 	pcapSessionMap            map[string]*pcapSession
 	loopbackRerouteInputChan  chan *gopacket.Packet
-	loopbackRerouteOutputChan chan *gopacket.Packet
+	loopbackRerouteOutputChan chan *outPacket
 	loopbackPcapSession       *pcapSession
 	arpCacheTimeout           time.Duration
 	arpRequestTimeout         time.Duration
@@ -40,7 +40,7 @@ func NewRawSocketCore(arpCacheTimeout, arpRequestTimeout int, debug bool) *RawSo
 	core := &RawSocketCore{
 		pcapSessionMap:            make(map[string]*pcapSession),
 		loopbackRerouteInputChan:  make(chan *gopacket.Packet),
-		loopbackRerouteOutputChan: make(chan *gopacket.Packet),
+		loopbackRerouteOutputChan: make(chan *outPacket),
 		arpCacheTimeout:           time.Duration(arpCacheTimeout) * time.Second,
 		arpRequestTimeout:         time.Duration(arpRequestTimeout) * time.Second,
 		pcapSessionCloseSig:       make(chan *pcapSession),
@@ -137,6 +137,33 @@ func (core *RawSocketCore) DialIP(protocol layers.IPProtocol, srcIP, dstIP net.I
 		iface, err = findInterfaceByIP(srcIP)
 		if err != nil {
 			return nil, fmt.Errorf("provided srcIP %v is not a local IP: %v", srcIP, err)
+		}
+		// ensure srcIP is routable to dstIP
+		var srcIP0 net.IP
+		srcIP0, _, gatewayIP, err = GetLocalIP(dstIP)
+		if err != nil {
+			return nil, err
+		}
+
+		// Check if srcIP and srcIP0 are in the same subnet
+		addrs, err := iface.Addrs()
+		if err != nil {
+			return nil, fmt.Errorf("failed to get interface addresses: %v", err)
+		}
+
+		sameSubnet := false
+		for _, addr := range addrs {
+			if ipnet, ok := addr.(*net.IPNet); ok {
+				if ipnet.Contains(srcIP) && ipnet.Contains(srcIP0) {
+					sameSubnet = true
+					break
+				}
+			}
+		}
+
+		if !sameSubnet {
+			return nil, fmt.Errorf("provided srcIP %v is not routable to destination IP %v",
+				srcIP, dstIP)
 		}
 	}
 	if gatewayIP != nil {
