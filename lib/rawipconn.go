@@ -59,7 +59,9 @@ func (conn *RawIPConn) Read(buffer []byte) (int, error) {
 	startTime := time.Now() // Start timing
 
 	// Log buffer status
-	log.Printf("Read: inputChan length: %d, capacity: %d", len(conn.inputChan), cap(conn.inputChan))
+	if Debug {
+		log.Printf("Read: inputChan length: %d, capacity: %d", len(conn.inputChan), cap(conn.inputChan))
+	}
 
 	var (
 		packet *gopacket.Packet
@@ -69,19 +71,16 @@ func (conn *RawIPConn) Read(buffer []byte) (int, error) {
 	// Time the channel read operation
 	chanReadStart := time.Now()
 
-	// Simplified blocking read for diagnosis (no deadline handling)
+	/*// Simplified blocking read for diagnosis (no deadline handling)
 	packet, ok = <-conn.inputChan
 	if !ok {
 		return 0, fmt.Errorf("connection closed")
-	}
+	}*/
 
-	/*// Only lock when accessing shared state
+	// Only lock when accessing shared state
 	conn.mu.Lock()
 	deadline := conn.readDeadline
 	conn.mu.Unlock()
-
-	// Time the channel read operation
-	chanReadStart := time.Now()
 
 	// Handle the read deadline
 	if !deadline.IsZero() {
@@ -103,9 +102,11 @@ func (conn *RawIPConn) Read(buffer []byte) (int, error) {
 		if !ok {
 			return 0, fmt.Errorf("connection closed")
 		}
-	}*/
+	}
 
-	log.Printf("chanRead: Time taken: %v\n", time.Since(chanReadStart))
+	if Debug {
+		log.Printf("chanRead: Time taken: %v\n", time.Since(chanReadStart))
+	}
 
 	// Time the packet processing
 	processStart := time.Now()
@@ -121,9 +122,11 @@ func (conn *RawIPConn) Read(buffer []byte) (int, error) {
 	}
 	copy(buffer, rawData)
 
-	log.Printf("Read: Packet processing took: %v", time.Since(processStart))
+	if Debug {
+		log.Printf("Read: Packet processing took: %v", time.Since(processStart))
 
-	log.Printf("Read: Total time taken: %v\n", time.Since(startTime))
+		log.Printf("Read: Total time taken: %v\n", time.Since(startTime))
+	}
 
 	return len(rawData), nil
 }
