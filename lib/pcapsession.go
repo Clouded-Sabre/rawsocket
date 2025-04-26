@@ -249,11 +249,14 @@ func (ps *pcapSession) handleIncomingPackets() {
 
 // processPacket processes an incoming packet and forwards it to the appropriate RawIPConn
 func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
-	globalDebug := Debug
+	/*globalDebug := Debug
 	Debug = true                           // Enable debug logging for this function
 	defer func() { Debug = globalDebug }() // Restore original debug state
+	*/
 
-	log.Printf("pcapSession.processIncomingPacket(%s): start processing packet.\n", ps.params.iface.Name)
+	if Debug {
+		log.Printf("pcapSession.processIncomingPacket(%s): start processing packet.\n", ps.params.iface.Name)
+	}
 	startTime := time.Now() // Start timing
 
 	// Check for ARP packets first
@@ -331,11 +334,11 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 			log.Printf("pcapSession.processIncomingPacket(%s): Forwarding IP packet to client inputChan of %s\n", ps.params.iface.Name, key)
 		}
 
-		log.Printf("pcapSession.processIncomingPacket(%s): sending packet to rawIpConn's inputChan.\n", ps.params.iface.Name)
 		conn.inputChan <- &newIpPacket
 
-		log.Printf("pcapSession.processIncomingPacket(%s): Time taken: %v\n", ps.params.iface.Name, time.Since(startTime))
-
+		if Debug {
+			log.Printf("pcapSession.processIncomingPacket(%s): Time taken: %v\n", ps.params.iface.Name, time.Since(startTime))
+		}
 		return
 	}
 
