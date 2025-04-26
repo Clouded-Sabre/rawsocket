@@ -408,6 +408,11 @@ func (ps *pcapSession) handleOutgoingPackets() {
 			ipv4, _ := ipLayer.(*layers.IPv4)
 			destIP := ipv4.DstIP
 
+			if Debug {
+				log.Printf("handleOutgoingPackets: Packet preparation middle, time taken: %v", time.Since(startTime))
+				startTime = time.Now()
+			}
+
 			if ps.isLoopback {
 				buffer = gopacket.NewSerializeBuffer()
 				err = serializeLoopbackPacket(buffer, options, (*pkt).Data())
@@ -455,7 +460,6 @@ func (ps *pcapSession) handleOutgoingPackets() {
 
 			if Debug {
 				log.Printf("handleOutgoingPackets: Packet preparation ready, time taken: %v", time.Since(startTime))
-				startTime = time.Now()
 			}
 
 			ps.writeMu.Lock()
@@ -464,10 +468,6 @@ func (ps *pcapSession) handleOutgoingPackets() {
 
 			if err != nil {
 				log.Printf("Error writing packet: %v", err)
-			}
-
-			if Debug {
-				log.Printf("handleOutgoingPackets: Packet sent, time taken: %v", time.Since(startTime))
 			}
 		}
 	}
