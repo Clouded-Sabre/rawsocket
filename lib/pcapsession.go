@@ -44,10 +44,23 @@ type pcapSession struct {
 
 // NewPcapSession creates a new NewPcapSession with a global ARP cache
 func newPcapSession(params *pcapSessionParams, config *pcapSessionConfig) (*pcapSession, error) {
-	var err error
-	params.handle, err = pcap.OpenLive(getPcapDeviceName(params.iface), 65536, true, pcap.BlockForever)
+	handle, err := pcap.OpenLive(
+		getPcapDeviceName(params.iface),
+		65536, // snapshot length
+		false, // promiscuous mode
+		pcap.BlockForever,
+	)
 	if err != nil {
 		return nil, err
+	}
+
+	params.handle = handle
+
+	// Set BPF filter to capture IP and ARP packets
+	bpfFilter := "ip or arp"
+	if err := handle.SetBPFFilter(bpfFilter); err != nil {
+		handle.Close()
+		return nil, fmt.Errorf("failed to set BPF filter '%s': %w", bpfFilter, err)
 	}
 
 	session := &pcapSession{
@@ -262,7 +275,7 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 	if exists {
 		conn := value.(*RawIPConn)
 		if Debug {
-			fmt.Printf("pcapSession.processIncomingPacket(%s): Forwarding IP packet to client inputChan of %s\n", ps.params.iface.Name, key)
+			log.Printf("pcapSession.processIncomingPacket(%s): Forwarding IP packet to client inputChan of %s\n", ps.params.iface.Name, key)
 		}
 
 		log.Printf("pcapSession.processIncomingPacket(%s): sending packet to rawIpConn's inputChan.\n", ps.params.iface.Name)
@@ -276,13 +289,13 @@ func (ps *pcapSession) processIncomingPacket(packet *gopacket.Packet) {
 	// Construct the server connection key for RawIPConn lookup
 	key = ipv4.DstIP.String() + ":" + protocol.String()
 	if Debug {
-		log.Println("Server key is", key)
+		log.Printf("pcapSession.processIncomingPacket(%s): Server key is %s\n", ps.params.iface.Name, key)
 	}
 	value, exists = ps.rawIPConnMap.Load(key)
 	if exists {
 		conn := value.(*RawIPConn)
 		if Debug {
-			fmt.Printf("pcapSession.processIncomingPacket(%s): Forwarding IP packet to server inputChan of %s\n", ps.params.iface.Name, key)
+			log.Printf("pcapSession.processIncomingPacket(%s): Forwarding IP packet to server inputChan of %s\n", ps.params.iface.Name, key)
 		}
 
 		conn.inputChan <- &newIpPacket
