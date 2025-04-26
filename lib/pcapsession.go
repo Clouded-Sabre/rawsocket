@@ -427,6 +427,11 @@ func (ps *pcapSession) handleOutgoingPackets() {
 					continue
 				}
 
+				if Debug {
+					log.Printf("handleOutgoingPackets: Packet preparation middle, time taken: %v", time.Since(startTime))
+					startTime = time.Now()
+				}
+
 				_, _, gatewayIP, _ := GetLocalIP(destIP)
 				var nextHopIp = destIP
 				if gatewayIP != nil {
@@ -439,8 +444,7 @@ func (ps *pcapSession) handleOutgoingPackets() {
 				}
 
 				if Debug {
-					log.Printf("handleOutgoingPackets: Packet preparation middle, time taken: %v", time.Since(startTime))
-					startTime = time.Now()
+					log.Printf("handleOutgoingPackets: Packet preparation ready, time taken: %v", time.Since(startTime))
 				}
 
 				buffer = gopacket.NewSerializeBuffer()
@@ -456,10 +460,6 @@ func (ps *pcapSession) handleOutgoingPackets() {
 					log.Println("Error serializing ethernet packet:", err)
 					continue
 				}
-			}
-
-			if Debug {
-				log.Printf("handleOutgoingPackets: Packet preparation ready, time taken: %v", time.Since(startTime))
 			}
 
 			ps.writeMu.Lock()
