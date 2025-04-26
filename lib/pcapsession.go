@@ -390,7 +390,7 @@ func (ps *pcapSession) handleOutgoingPackets() {
 		case <-ps.stopChan:
 			return
 		case pkt := <-ps.outgoingPackets:
-			startTime := time.Now()
+
 			if Debug {
 				log.Printf("handleOutgoingPackets: outgoingPackets channel length: %d/%d",
 					len(ps.outgoingPackets), cap(ps.outgoingPackets))
@@ -427,16 +427,19 @@ func (ps *pcapSession) handleOutgoingPackets() {
 					continue
 				}
 
-				if Debug {
-					log.Printf("handleOutgoingPackets: Packet preparation middle, time taken: %v", time.Since(startTime))
-					startTime = time.Now()
-				}
+				startTime := time.Now()
 
 				_, _, gatewayIP, _ := GetLocalIP(destIP)
 				var nextHopIp = destIP
 				if gatewayIP != nil {
 					nextHopIp = gatewayIP
 				}
+
+				if Debug {
+					log.Printf("handleOutgoingPackets: Packet preparation middle, time taken: %v", time.Since(startTime))
+					startTime = time.Now()
+				}
+
 				dstMAC, err := getRemoteMAC(ps.params.iface, nextHopIp, ps.config.arpRequestTimeout, ps.params.arpCache, ps)
 				if err != nil {
 					log.Println("pcapSession.handleOutgoingPackets: failed to retrieve remote mac address:", err)
