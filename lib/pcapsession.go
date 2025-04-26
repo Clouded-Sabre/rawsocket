@@ -47,7 +47,7 @@ func newPcapSession(params *pcapSessionParams, config *pcapSessionConfig) (*pcap
 	handle, err := pcap.OpenLive(
 		getPcapDeviceName(params.iface),
 		65536, // snapshot length
-		false, // promiscuous mode
+		false, // non-promiscuous mode
 		pcap.BlockForever,
 	)
 	if err != nil {
