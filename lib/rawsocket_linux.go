@@ -5,6 +5,7 @@ package lib
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"time"
@@ -26,6 +27,7 @@ func (r *RawConnectionImpl) ReadFrom(b []byte) (int, net.Addr, error) {
 }
 
 func (r *RawConnectionImpl) Write(b []byte) (int, error) {
+	log.Println("Calling Linux raw socket write")
 	return r.conn.Write(b)
 }
 
